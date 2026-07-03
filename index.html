@@ -156,6 +156,7 @@ tbody tr:hover{background:#F5F8FF}
   <div class="tab" onclick="switchTab('tab-filiais')" id="tab-filiais">🏢 Por Filial</div>
   <div class="tab" onclick="switchTab('tab-regional')" id="tab-regional">🗺️ Regional / Auditor</div>
   <div class="tab" onclick="switchTab('tab-grupos')" id="tab-grupos">📂 Grupos de Conta</div>
+  <div class="tab" onclick="switchTab('tab-comparativo')" id="tab-comparativo">⚖️ Comparativo Filiais</div>
   <div class="tab" onclick="switchTab('tab-export')" id="tab-export">📸 Exportar Imagens</div>
   <div class="tab" onclick="switchTab('tab-upload')" id="tab-upload">🔄 Atualizar Base</div>
 </div>
@@ -342,6 +343,62 @@ tbody tr:hover{background:#F5F8FF}
   </div>
 </div>
 
+<!-- ======================== TAB: COMPARATIVO FILIAIS ======================== -->
+<div class="content" id="content-tab-comparativo">
+  <div class="filters">
+    <div class="f-group">
+      <label>Faixa de Faturamento Parecido</label>
+      <select id="cmp-tol" onchange="renderComparativo()">
+        <option value="10">± 10%</option>
+        <option value="15" selected>± 15%</option>
+        <option value="20">± 20%</option>
+        <option value="25">± 25%</option>
+      </select>
+    </div>
+    <div class="f-group">
+      <label>Alertar Diferença de Gasto ≥</label>
+      <select id="cmp-mindiff" onchange="renderComparativo()">
+        <option value="5">5 p.p.</option>
+        <option value="8" selected>8 p.p.</option>
+        <option value="10">10 p.p.</option>
+        <option value="15">15 p.p.</option>
+      </select>
+    </div>
+    <div style="margin-left:auto" class="icon-toolbar">
+      <button class="ico-btn" onclick="exportTable('tbl-comparativo','comparativo_filiais')" title=""><span class="tooltip">Exportar tabela PNG</span>📥</button>
+      <button class="ico-btn" onclick="copyTableCSV('tbl-comparativo')" title=""><span class="tooltip">Copiar CSV</span>📋</button>
+    </div>
+  </div>
+
+  <div class="section-title" id="cmp-summary">⚖️ Filiais com faturamento parecido, mas gasto discrepante</div>
+
+  <div class="charts-grid" style="grid-template-columns:1fr;margin-bottom:18px">
+    <div class="chart-box">
+      <h3>🔎 Faturamento x % Desp/Fat — pontos em vermelho = discrepância acima do limite</h3>
+      <div class="chart-wrap" style="height:360px"><canvas id="ch-comparativo"></canvas></div>
+    </div>
+  </div>
+
+  <div class="tbl-box">
+    <h3>📋 Filiais comparáveis (faturamento parecido) ordenadas pela maior diferença de % Desp/Fat</h3>
+    <table id="tbl-comparativo">
+      <thead>
+        <tr>
+          <th>Filial</th>
+          <th>Loja</th>
+          <th>Regional</th>
+          <th class="num">Fat. Realizado</th>
+          <th class="num">% Desp/Fat</th>
+          <th class="num">Média dos Pares</th>
+          <th class="num">Diferença</th>
+          <th>Filiais Comparáveis</th>
+        </tr>
+      </thead>
+      <tbody id="body-comparativo"></tbody>
+    </table>
+  </div>
+</div>
+
 <!-- ======================== TAB: EXPORT PNG ======================== -->
 <div class="content" id="content-tab-export">
   <div class="filters" style="margin-bottom:16px">
@@ -494,6 +551,7 @@ function initAll(){
   renderTabFiliais(DATA.filiais);
   renderTabRegional();
   renderTabGrupos();
+  renderComparativo();
   renderExportCards();
   updateCardGeral(m);
 }
@@ -824,6 +882,80 @@ function renderTabGrupos(){
 }
 
 // =========================================================
+// COMPARATIVO DE FILIAIS (faturamento parecido, gasto discrepante)
+// =========================================================
+function computeComparativo(tolPerc){
+  const filiais = DATA.filiais.filter(f=>f.FAT_REAL>0);
+  return filiais.map(f=>{
+    const lo=f.FAT_REAL*(1-tolPerc/100), hi=f.FAT_REAL*(1+tolPerc/100);
+    const peers=filiais.filter(x=>x.ID_FILIAL!==f.ID_FILIAL && x.FAT_REAL>=lo && x.FAT_REAL<=hi);
+    const peerAvg = peers.length ? peers.reduce((s,x)=>s+x.PERC_DESP,0)/peers.length : null;
+    const diff = peerAvg!=null ? f.PERC_DESP-peerAvg : null;
+    return {...f, peerAvg, diff, peerCount:peers.length, peerList:peers.map(p=>p.SIGLA||p.ID_FILIAL)};
+  }).filter(f=>f.peerCount>0);
+}
+
+function renderComparativo(){
+  if(!DATA)return;
+  const tol=parseInt(document.getElementById('cmp-tol').value||15,10);
+  const minDiff=parseInt(document.getElementById('cmp-mindiff').value||8,10);
+  const comp=computeComparativo(tol).sort((a,b)=>Math.abs(b.diff)-Math.abs(a.diff));
+  const alertas=comp.filter(f=>Math.abs(f.diff)>=minDiff);
+
+  document.getElementById('cmp-summary').textContent =
+    `⚖️ ${alertas.length} filial(is) com % Desp/Fat divergindo ≥ ${minDiff} p.p. de filiais com faturamento parecido (±${tol}%)`;
+
+  const b=document.getElementById('body-comparativo');
+  if(!comp.length){
+    b.innerHTML='<tr><td colspan="8" class="empty">Nenhuma filial encontrou pares com faturamento parecido nesta faixa</td></tr>';
+  }else{
+    b.innerHTML=comp.map(f=>{
+      const isAlert=Math.abs(f.diff)>=minDiff;
+      const diffCls = isAlert ? (f.diff>0?'tx-neg':'tx-pos') : '';
+      return `<tr${isAlert?' style="background:#FFF5F5"':''}>
+        <td><span class="sigla">${f.SIGLA||f.ID_FILIAL}</span>${isAlert?' ⚠️':''}</td>
+        <td>${f.LOJA||'—'}</td>
+        <td>${f.REGIONAL||'—'}</td>
+        <td class="num">${fmtM(f.FAT_REAL)}</td>
+        <td class="num ${f.PERC_DESP>20?'tx-neg':f.PERC_DESP<13?'tx-pos':'tx-warn'}">${fmtP(f.PERC_DESP)}</td>
+        <td class="num">${fmtP(f.peerAvg)}</td>
+        <td class="num ${diffCls}">${f.diff>0?'+':''}${fmtP(f.diff)}</td>
+        <td style="font-size:11px">${f.peerCount} filial(is): ${f.peerList.slice(0,6).join(', ')}${f.peerList.length>6?'…':''}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  renderComparativoChart(comp, minDiff);
+}
+
+function renderComparativoChart(comp, minDiff){
+  destroyChart('ch-comparativo');
+  const ctx=document.getElementById('ch-comparativo').getContext('2d');
+  charts_reg['ch-comparativo']=new Chart(ctx,{
+    type:'scatter',
+    data:{datasets:[{
+      label:'Filiais',
+      data:comp.map(f=>({x:f.FAT_REAL,y:f.PERC_DESP,sigla:f.SIGLA||f.ID_FILIAL,diff:f.diff})),
+      backgroundColor:comp.map(f=>Math.abs(f.diff)>=minDiff?'#C62828':'#0D47A1'),
+      pointRadius:comp.map(f=>Math.abs(f.diff)>=minDiff?7:4),
+      pointHoverRadius:9
+    }]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{callbacks:{label:c=>{
+          const p=c.raw;
+          return `${p.sigla}: ${fmtM(p.x)} | ${p.y.toFixed(2)}% Desp/Fat (Δ ${p.diff>0?'+':''}${p.diff.toFixed(1)} p.p. vs pares)`;
+        }}}
+      },
+      scales:{
+        x:{title:{display:true,text:'Faturamento Realizado',font:{size:11}},ticks:{callback:v=>fmtM(v),font:{size:9}}},
+        y:{title:{display:true,text:'% Despesa/Faturamento',font:{size:11}},ticks:{callback:v=>v+'%',font:{size:9}}}
+      }}
+  });
+}
+
+// =========================================================
 // FILTROS OVERVIEW
 // =========================================================
 function applyOvFilters(){
@@ -1074,8 +1206,38 @@ d['GERENTE']=d['ID_FILIAL'].map(fg)
 d['SUPERVISOR']=d['ID_FILIAL'].map(fsu)
 d['ESTADO']=d['ID_FILIAL'].map(fe)
 
-fat = d[d['GRUPO_CONTA'] == '01-VENDAS DE MERCADORIAS'].copy()
-desp = d[d['GRUPO_CONTA'] != '01-VENDAS DE MERCADORIAS'].copy()
+# ==== CLASSIFICAÇÃO: FATURAMENTO x DESPESA ====
+# Faturamento (Realizado) = SOMA de VLR_REALIZADO SOMENTE dos lançamentos cujo
+# GRUPO_CONTA esteja listado abaixo. Tudo que não estiver nesta lista entra
+# como despesa. Se surgir outro grupo de receita na base (ex.: devoluções,
+# vendas de serviços), adicione-o aqui.
+GRUPOS_RECEITA = [
+    '01-VENDAS DE MERCADORIAS',
+]
+
+def _norm(s):
+    return str(s).strip().upper()
+
+grupos_receita_norm = {_norm(g) for g in GRUPOS_RECEITA}
+d['_GC_NORM'] = d['GRUPO_CONTA'].apply(_norm)
+
+fat = d[d['_GC_NORM'].isin(grupos_receita_norm)].copy()
+desp = d[~d['_GC_NORM'].isin(grupos_receita_norm)].copy()
+
+# Diagnóstico: mostra como cada GRUPO_CONTA da base foi classificado e o
+# valor de VLR_REALIZADO somado em cada um. Use isso para conferir se o
+# faturamento total bate com o esperado — se houver um grupo de receita
+# faltando na lista acima, ele vai aparecer somado dentro de "DESPESA".
+_resumo = d.groupby('GRUPO_CONTA')['VLR_REALIZADO'].agg(['count','sum']).reset_index()
+_resumo['CLASSIFICACAO'] = _resumo['GRUPO_CONTA'].apply(lambda g: 'RECEITA' if _norm(g) in grupos_receita_norm else 'DESPESA')
+print("\n📋 Classificação por GRUPO_CONTA (confira se está correto):")
+for _, row in _resumo.sort_values('sum', ascending=False).iterrows():
+    print(f"  [{row['CLASSIFICACAO']:8s}] {row['GRUPO_CONTA']:45s} | {int(row['count']):6d} lanç. | R$ {row['sum']:,.2f}")
+print()
+
+if fat.empty:
+    print("⚠️  ATENÇÃO: nenhum lançamento casou com GRUPOS_RECEITA — faturamento vai ficar zerado. Confira os nomes exatos em GRUPO_CONTA na planilha.")
+    sys.exit(1)
 
 anos = sorted(d['ANO'].unique())
 meses_disp = sorted(d['MES'].unique())
@@ -1135,7 +1297,8 @@ payload={
 
 with open(OUT,'w',encoding='utf-8') as f:
     json.dump(payload,f,ensure_ascii=False,default=str)
-print(f"✅ {OUT} gerado | Fat: R$ {tot_fat_real:,.0f} | Desp: R$ {tot_desp_real:,.0f}")
+print(f"✅ {OUT} gerado | Grupos de receita: {', '.join(GRUPOS_RECEITA)}")
+print(f"✅ Fat: R$ {tot_fat_real:,.0f} | Desp: R$ {tot_desp_real:,.0f} | Resultado: R$ {tot_fat_real-tot_desp_real:,.0f}")
 `;
   const blob=new Blob([script],{type:'text/plain'});
   const a=document.createElement('a');
