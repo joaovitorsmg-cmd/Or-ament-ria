@@ -606,12 +606,25 @@ function switchTab(id){
 async function loadData(src){
   try{
     const r = await fetch(src);
+    if(!r.ok) throw new Error('HTTP '+r.status);
     DATA = await r.json();
     initAll();
   }catch(e){
     console.error(e);
-    document.body.innerHTML += '<p style="color:red;padding:20px">Erro ao carregar aqm_data.json</p>';
+    showNoDataState();
   }
+}
+
+// Estado "sem base carregada ainda" — este painel público não guarda dados
+// reais no repositório (faturamento/despesas são sensíveis), então a cada
+// novo acesso é preciso importar o aqm_data.json manualmente na aba
+// "Atualizar Base". Isso é esperado, não é um erro do painel.
+function showNoDataState(){
+  document.getElementById('hd-periodo').textContent = 'Nenhuma base carregada';
+  document.getElementById('hd-filiais').textContent = 'importe o aqm_data.json';
+  switchTab('tab-upload');
+  addLog('👋 Nenhuma base carregada ainda neste navegador — isso é normal, os dados não ficam salvos no site por segurança.', '');
+  addLog('1) Baixe o gerar_json.py abaixo → 2) rode na sua planilha → 3) arraste o aqm_data.json gerado na área acima.', 'log-ok');
 }
 
 function initAll(){
