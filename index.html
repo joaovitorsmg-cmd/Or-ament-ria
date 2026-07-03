@@ -1190,6 +1190,17 @@ OUT = 'aqm_data.json'
 d = pd.read_excel(DESPESA_FILE)
 r = pd.read_excel(REGIONAIS_FILE)
 
+# ==== PERÍODO: usar SEMPRE ANO/MES/DIA (colunas I/J/K), NUNCA DATA_LANCAMENTO ====
+# DATA_LANCAMENTO/DATA_APROVACAO são apenas a data em que a contabilidade
+# fechou/aprovou o lote no sistema — não representam a competência do
+# lançamento. A competência real é dada por ANO, MES e DIA.
+# ANO_REFERENCIA: deixe None para usar automaticamente o ano mais recente
+# presente na base (evita somar 2025 + 2026 juntos). Ou defina um ano fixo.
+ANO_REFERENCIA = None
+ano_alvo = ANO_REFERENCIA if ANO_REFERENCIA else int(d['ANO'].max())
+print(f"📅 Ano de referência do painel: {ano_alvo} (defina ANO_REFERENCIA no topo do script para mudar)")
+d = d[d['ANO'] == ano_alvo].copy()
+
 fl = dict(zip(r['FILIAL'], r['LOJA']))
 fr = dict(zip(r['FILIAL'], r['REGIONAL']))
 fa = dict(zip(r['FILIAL'], r['AUDITOR']))
@@ -1201,10 +1212,12 @@ fe = dict(zip(r['FILIAL'], r['ESTADO']))
 d['LOJA']=d['ID_FILIAL'].map(fl)
 d['REGIONAL']=d['ID_FILIAL'].map(fr)
 d['AUDITOR']=d['ID_FILIAL'].map(fa)
-d['SIGLA']=d['ID_FILIAL'].map(fs)
+d['SIGLA']=d['ID_FILIAL'].map(fs).fillna(d['ID_FILIAL'].apply(lambda x: f'F{x}'))
 d['GERENTE']=d['ID_FILIAL'].map(fg)
 d['SUPERVISOR']=d['ID_FILIAL'].map(fsu)
 d['ESTADO']=d['ID_FILIAL'].map(fe)
+for col in ['LOJA','REGIONAL','AUDITOR','GERENTE','SUPERVISOR','ESTADO']:
+    d[col] = d[col].fillna('N/D')
 
 # ==== CLASSIFICAÇÃO: FATURAMENTO x DESPESA ====
 # Faturamento (Realizado) = SOMA de VLR_REALIZADO SOMENTE dos lançamentos cujo
@@ -1239,38 +1252,52 @@ if fat.empty:
     print("⚠️  ATENÇÃO: nenhum lançamento casou com GRUPOS_RECEITA — faturamento vai ficar zerado. Confira os nomes exatos em GRUPO_CONTA na planilha.")
     sys.exit(1)
 
-anos = sorted(d['ANO'].unique())
-meses_disp = sorted(d['MES'].unique())
-periodo_str = f"Jan-Mai {max(anos)}" if len(anos)==1 else f"{min(anos)}-{max(anos)}"
-
 mes_nomes={1:'Jan',2:'Fev',3:'Mar',4:'Abr',5:'Mai',6:'Jun',7:'Jul',8:'Ago',9:'Set',10:'Out',11:'Nov',12:'Dez'}
+
+# Período exibido no cabeçalho = meses do ano de referência que já têm
+# faturamento realizado (> 0). Meses futuros com apenas orçamento (VLR_PREVISAO)
+# e nenhum realizado ficam de fora do rótulo, mas continuam no gráfico de sazonalidade.
+meses_com_realizado = sorted(fat[fat['VLR_REALIZADO']>0]['MES'].unique())
+if meses_com_realizado:
+    periodo_str = f"{mes_nomes[min(meses_com_realizado)]}-{mes_nomes[max(meses_com_realizado)]} {ano_alvo}"
+else:
+    periodo_str = f"{ano_alvo}"
+
+# Divisão segura: evita NaN/Infinity quando o denominador é 0 (ex.: mês
+# futuro sem faturamento realizado ainda). NaN/Infinity não são JSON válido
+# e quebram o carregamento do painel no navegador (JSON.parse falha).
+def pct(numer, denom):
+    return (numer/denom*100).replace([float('inf'),float('-inf')],0).fillna(0).round(2)
+
+def pct_s(n, d):
+    return round(n/d*100, 2) if d else 0.0
 
 fat_fil = fat.groupby(['ID_FILIAL','SIGLA','LOJA','REGIONAL','AUDITOR','GERENTE','SUPERVISOR','ESTADO']).agg(FAT_REAL=('VLR_REALIZADO','sum'),FAT_PREV=('VLR_PREVISAO','sum')).reset_index()
 desp_fil = desp.groupby('ID_FILIAL').agg(DESP_REAL=('VLR_REALIZADO','sum'),DESP_PREV=('VLR_PREVISAO','sum')).reset_index()
 filiais = fat_fil.merge(desp_fil, on='ID_FILIAL', how='left').fillna(0)
-filiais['PERC_DESP']=(filiais['DESP_REAL']/filiais['FAT_REAL']*100).round(2)
-filiais['DESVIO_FAT']=((filiais['FAT_REAL']-filiais['FAT_PREV'])/filiais['FAT_PREV']*100).round(2)
-filiais['DESVIO_DESP']=((filiais['DESP_REAL']-filiais['DESP_PREV'])/filiais['DESP_PREV']*100).round(2)
+filiais['PERC_DESP']=pct(filiais['DESP_REAL'], filiais['FAT_REAL'])
+filiais['DESVIO_FAT']=pct(filiais['FAT_REAL']-filiais['FAT_PREV'], filiais['FAT_PREV'])
+filiais['DESVIO_DESP']=pct(filiais['DESP_REAL']-filiais['DESP_PREV'], filiais['DESP_PREV'])
 filiais=filiais.sort_values('FAT_REAL',ascending=False)
 
 fat_mes=fat.groupby('MES').agg(FAT_REAL=('VLR_REALIZADO','sum'),FAT_PREV=('VLR_PREVISAO','sum')).reset_index()
 desp_mes=desp.groupby('MES').agg(DESP_REAL=('VLR_REALIZADO','sum'),DESP_PREV=('VLR_PREVISAO','sum')).reset_index()
 meses=fat_mes.merge(desp_mes,on='MES').fillna(0)
 meses['NOME']=meses['MES'].map(mes_nomes)
-meses['PERC_DESP']=(meses['DESP_REAL']/meses['FAT_REAL']*100).round(2)
+meses['PERC_DESP']=pct(meses['DESP_REAL'], meses['FAT_REAL'])
 
 fat_reg=fat.groupby('REGIONAL').agg(FAT_REAL=('VLR_REALIZADO','sum'),FAT_PREV=('VLR_PREVISAO','sum')).reset_index()
 desp_reg=desp.groupby('REGIONAL').agg(DESP_REAL=('VLR_REALIZADO','sum'),DESP_PREV=('VLR_PREVISAO','sum')).reset_index()
 regionais_out=fat_reg.merge(desp_reg,on='REGIONAL').fillna(0)
-regionais_out['PERC_DESP']=(regionais_out['DESP_REAL']/regionais_out['FAT_REAL']*100).round(2)
+regionais_out['PERC_DESP']=pct(regionais_out['DESP_REAL'], regionais_out['FAT_REAL'])
 
 fat_aud=fat.groupby('AUDITOR').agg(FAT_REAL=('VLR_REALIZADO','sum'),FAT_PREV=('VLR_PREVISAO','sum')).reset_index()
 desp_aud=desp.groupby('AUDITOR').agg(DESP_REAL=('VLR_REALIZADO','sum'),DESP_PREV=('VLR_PREVISAO','sum')).reset_index()
 auditores=fat_aud.merge(desp_aud,on='AUDITOR').fillna(0)
-auditores['PERC_DESP']=(auditores['DESP_REAL']/auditores['FAT_REAL']*100).round(2)
+auditores['PERC_DESP']=pct(auditores['DESP_REAL'], auditores['FAT_REAL'])
 
 grupos=desp.groupby('GRUPO_CONTA').agg(DESP_REAL=('VLR_REALIZADO','sum'),DESP_PREV=('VLR_PREVISAO','sum')).reset_index().sort_values('DESP_REAL',ascending=False)
-grupos['DESVIO']=((grupos['DESP_REAL']-grupos['DESP_PREV'])/grupos['DESP_PREV']*100).round(2)
+grupos['DESVIO']=pct(grupos['DESP_REAL']-grupos['DESP_PREV'], grupos['DESP_PREV'])
 
 tot_fat_real=fat['VLR_REALIZADO'].sum()
 tot_fat_prev=fat['VLR_PREVISAO'].sum()
@@ -1282,11 +1309,11 @@ payload={
         'periodo':periodo_str,'filiais_count':int(len(filiais)),
         'tot_fat_real':round(tot_fat_real,2),'tot_fat_prev':round(tot_fat_prev,2),
         'tot_desp_real':round(tot_desp_real,2),'tot_desp_prev':round(tot_desp_prev,2),
-        'perc_desp_real':round(tot_desp_real/tot_fat_real*100,2),
-        'perc_desp_plan':round(tot_desp_prev/tot_fat_prev*100,2),
+        'perc_desp_real':pct_s(tot_desp_real,tot_fat_real),
+        'perc_desp_plan':pct_s(tot_desp_prev,tot_fat_prev),
         'resultado':round(tot_fat_real-tot_desp_real,2),
-        'dev_fat':round((tot_fat_real-tot_fat_prev)/tot_fat_prev*100,2),
-        'dev_desp':round((tot_desp_real-tot_desp_prev)/tot_desp_prev*100,2)
+        'dev_fat':pct_s(tot_fat_real-tot_fat_prev,tot_fat_prev),
+        'dev_desp':pct_s(tot_desp_real-tot_desp_prev,tot_desp_prev)
     },
     'filiais':filiais.to_dict('records'),
     'meses':meses.to_dict('records'),
