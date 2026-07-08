@@ -261,19 +261,19 @@ tbody tr:hover{background:var(--row-hover)}
 /* ===== ANÁLISE DETALHADA ===== */
 .filtros-bar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;background:var(--branco);border-radius:8px;padding:12px 16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px}
 .filtro-group{display:flex;flex-direction:column;gap:3px}
-.filtro-group label{font-size:10px;font-weight:700;color:var(--azul-escuro);letter-spacing:.5px}
-.filtro-group select{padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:12px;background:var(--branco);color:var(--texto);min-width:150px}
+.filtro-group label{font-size:10px;font-weight:700;color:var(--azul-esc);letter-spacing:.5px}
+.filtro-group select{padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:12px;background:var(--branco);color:var(--cinza);min-width:150px}
 .btn-limpar{padding:5px 14px;border:1px solid var(--border);border-radius:5px;background:transparent;color:var(--cinza);font-size:12px;cursor:pointer;white-space:nowrap;margin-bottom:0;align-self:flex-end}
-.btn-limpar:hover{background:var(--cinza-claro)}
+.btn-limpar:hover{background:var(--cinza-cl)}
 .analise-layout{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
 .analise-layout>.chart-box,.analise-layout>.tbl-box{min-width:280px}
 /* ---- Seletor de colunas ---- */
 .col-sel-popup{position:fixed;background:var(--branco);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.18);padding:10px 14px;min-width:190px;z-index:9999;font-size:12px;max-height:60vh;overflow-y:auto}
-.col-sel-title{font-weight:700;font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--azul-escuro);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)}
-.col-sel-row{display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;white-space:nowrap;color:var(--texto)}
-.col-sel-row:hover span{color:var(--azul-escuro)}
+.col-sel-title{font-weight:700;font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--azul-esc);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.col-sel-row{display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;white-space:nowrap;color:var(--cinza)}
+.col-sel-row:hover span{color:var(--azul-esc)}
 .btn-xs{font-size:10px;padding:2px 8px;border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer;color:var(--cinza)}
-.btn-xs:hover{background:var(--cinza-claro)}
+.btn-xs:hover{background:var(--cinza-cl)}
 /* ---- Comparativo multi-ano ---- */
 .cmp-yr-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;margin-right:4px}
 .badge-y1{background:rgba(30,136,229,.15);color:#1e88e5}
@@ -344,7 +344,7 @@ tbody tr:hover{background:var(--row-hover)}
   </div>
 
   <!-- CARD GERAL — resumo pronto para apresentação -->
-  <div id="card-geral" class="chart-box" style="max-width:900px;margin-bottom:18px;background:var(--azul-esc);color:#fff">
+  <div id="card-geral" class="chart-box" style="width:100%;margin-bottom:18px;background:var(--azul-esc);color:#fff">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
       <div>
         <div style="font-size:11px;color:var(--azul-cl);text-transform:uppercase;font-weight:700">Agroquima — Painel Orçamentário</div>
@@ -547,7 +547,7 @@ tbody tr:hover{background:var(--row-hover)}
 
 <!-- ======================== TAB: GRUPOS ======================== -->
 <div class="content" id="content-tab-grupos">
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:18px">
+  <div class="charts-grid">
     <div class="chart-box">
       <div class="chart-box-head">
         <h3>📂 Despesas por Grupo de Conta</h3>
@@ -753,7 +753,7 @@ tbody tr:hover{background:var(--row-hover)}
     <div style="font-size:12px;line-height:1.8;color:var(--cinza)">
       <div style="margin-bottom:14px">
         <strong style="color:var(--accent-text)">🐍 Via script Python (recomendado — inclui nomes de filial/regional/auditor):</strong>
-        <div style="margin:6px 0 4px;padding:8px 12px;background:var(--cinza-claro);border-radius:6px;font-size:11px;color:var(--text-muted)">
+        <div style="margin:6px 0 4px;padding:8px 12px;background:var(--cinza-cl);border-radius:6px;font-size:11px;color:var(--text-muted)">
           Coloque na mesma pasta os 3 arquivos:<br>
           &nbsp;&nbsp;📄 <code>Mapa_Despesa.xlsx</code> &nbsp;+&nbsp; 📄 <code>Base_regionais.xlsx</code> &nbsp;+&nbsp; 🐍 <code>gerar_json.py</code>
         </div>
@@ -1480,6 +1480,7 @@ function applyOvFilters(){
   m.dev_fat=m.tot_fat_prev>0?((m.tot_fat_real-m.tot_fat_prev)/m.tot_fat_prev*100):0;
   m.dev_desp=m.tot_desp_prev>0?((m.tot_desp_real-m.tot_desp_prev)/m.tot_desp_prev*100):0;
   renderKPIs(m);
+  updateCardGeral(m);
 }
 
 function clearOvFilters(){
@@ -1487,6 +1488,7 @@ function clearOvFilters(){
   document.getElementById('ov-auditor').value='';
   document.getElementById('ov-mes').value='';
   renderKPIs(DATA.meta);
+  updateCardGeral(DATA.meta);
 }
 
 // =========================================================
@@ -1512,6 +1514,7 @@ function clearFilFilters(){
 // EXPORT CARDS
 // =========================================================
 function updateCardGeral(m){
+  document.getElementById('cg-periodo').textContent=m.periodo||(DATA&&DATA.meta.periodo)||'—';
   document.getElementById('cg-fat').textContent=fmtM(m.tot_fat_real);
   document.getElementById('cg-fat-prev').textContent=fmtM(m.tot_fat_prev);
   document.getElementById('cg-fat-desv').textContent=(m.dev_fat<0?'▼ ':' ▲')+fmtP(Math.abs(m.dev_fat))+' vs plano';
