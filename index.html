@@ -269,6 +269,18 @@ body.presentation-mode .content{padding-top:16px}
 /* ===== SPARKLINES ===== */
 .spk{vertical-align:middle;border-radius:3px}
 
+/* ===== CHECKBOX DROPDOWN (filtro meses/ano) ===== */
+.chk-dropdown{position:relative}
+.chk-dd-trigger{display:flex;align-items:center;gap:6px;padding:5px 10px;background:var(--branco);border:1px solid var(--border-strong);border-radius:6px;font-size:13px;color:var(--cinza);cursor:pointer;white-space:nowrap;min-width:120px;justify-content:space-between;transition:.2s}
+.chk-dd-trigger:hover{border-color:var(--azul-cl)}
+.chk-dd-trigger .dd-arrow{font-size:9px;color:var(--text-muted);flex-shrink:0}
+.chk-dd-panel{position:absolute;top:calc(100% + 4px);left:0;background:var(--branco);border:1px solid var(--border-strong);border-radius:8px;padding:6px;min-width:160px;z-index:200;display:none;box-shadow:0 4px 16px var(--shadow);max-height:280px;overflow-y:auto}
+.chk-dd-panel.open{display:block}
+.chk-dd-item{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--cinza);user-select:none;white-space:nowrap}
+.chk-dd-item:hover{background:var(--hover-tint)}
+.chk-dd-item input{accent-color:var(--azul);width:14px;height:14px;cursor:pointer;flex-shrink:0}
+.chk-dd-item.item-all{font-weight:700;border-bottom:1px solid var(--border);margin-bottom:4px;padding-bottom:9px}
+
 /* ===== ANÁLISE DETALHADA ===== */
 .filtros-bar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;background:var(--branco);border-radius:8px;padding:12px 16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px}
 .filtro-group{display:flex;flex-direction:column;gap:3px}
@@ -343,11 +355,27 @@ body.presentation-mode .content{padding-top:16px}
       <label>Auditor</label>
       <select id="ov-auditor" onchange="applyOvFilters()"><option value="">Todos</option></select>
     </div>
+    <div class="f-group" id="fg-year" style="display:none">
+      <label>Ano</label>
+      <div class="chk-dropdown" id="dd-ano">
+        <button class="chk-dd-trigger" onclick="toggleChkDropdown('dd-ano')" type="button">
+          <span id="dd-ano-label">—</span><span class="dd-arrow">▾</span>
+        </button>
+        <div class="chk-dd-panel" id="dd-ano-panel"></div>
+      </div>
+    </div>
     <div class="f-group">
-      <label>Período</label>
-      <select id="ov-mes" onchange="applyOvFilters()">
-        <option value="">Período todo</option>
-      </select>
+      <label>Meses</label>
+      <div class="chk-dropdown" id="dd-mes">
+        <button class="chk-dd-trigger" onclick="toggleChkDropdown('dd-mes')" type="button">
+          <span id="dd-mes-label">Todos</span><span class="dd-arrow">▾</span>
+        </button>
+        <div class="chk-dd-panel" id="dd-mes-panel">
+          <label class="chk-dd-item item-all">
+            <input type="checkbox" id="chk-mes-all" checked onchange="onChkMesAll(this)"> Todos
+          </label>
+        </div>
+      </div>
     </div>
     <button class="btn btn-ghost" onclick="clearOvFilters()">✕ Limpar</button>
     <div class="toolbar-end icon-toolbar">
@@ -990,15 +1018,21 @@ function populateSelects(){
     auditores.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;s.appendChild(o);});
   });
 
-  // Meses disponíveis vêm de DATA.meses (dinâmico — funciona para qualquer
-  // período, não só Jan-Mai). Só lista meses com Realizado > 0 (mês futuro
-  // sem nada lançado não faz sentido escolher no filtro).
-  const ovMes=document.getElementById('ov-mes');
-  if(ovMes){
-    ovMes.innerHTML=`<option value="">Período todo (${DATA.meta.periodo})</option>`;
+  // Popula dropdown de meses com checkboxes
+  const mesPanel=document.getElementById('dd-mes-panel');
+  if(mesPanel){
+    // Mantém o item "Todos"
+    const allItem=mesPanel.querySelector('.item-all');
+    mesPanel.innerHTML='';
+    if(allItem) mesPanel.appendChild(allItem);
+    // Adiciona um checkbox por mês disponível
     (DATA.meses||[]).filter(mm=>mm.FAT_REAL>0).forEach(mm=>{
-      const o=document.createElement('option');o.value=mm.MES;o.textContent=mm.NOME;ovMes.appendChild(o);
+      const lbl=document.createElement('label');
+      lbl.className='chk-dd-item chk-dd-month';
+      lbl.innerHTML=`<input type="checkbox" class="chk-mes" value="${mm.MES}" checked onchange="onChkMes(this)"> ${mm.NOME}`;
+      mesPanel.appendChild(lbl);
     });
+    _updateMesLabel();
   }
 }
 
@@ -1467,18 +1501,27 @@ function renderTabelaComparativo(todosGrupos){
 function applyOvFilters(){
   const reg=document.getElementById('ov-regional').value;
   const aud=document.getElementById('ov-auditor').value;
-  const mes=document.getElementById('ov-mes').value; // '' = período todo, ou '1'..'12'
+  const meses=_getCheckedMeses(); // array de números, ou [] = todos
   const filiais=DATA.filiais.filter(f=>(!reg||f.REGIONAL===reg)&&(!aud||f.AUDITOR===aud));
 
   let linhas, periodo;
-  if(mes){
-    // Filtro por mês precisa da base filial×mês (DATA.filiais_mes), já que
-    // DATA.filiais só tem o total do período inteiro e DATA.meses não sabe
-    // separar por Regional/Auditor.
+  const todosOsMeses=meses.length===0||(DATA.meses||[]).filter(mm=>mm.FAT_REAL>0).length===meses.length;
+  if(!todosOsMeses && meses.length>0){
+    // Agrega filiais_mes apenas para os meses selecionados, agrupando por ID_FILIAL
     const idsFiltrados=new Set(filiais.map(f=>f.ID_FILIAL));
-    linhas=(DATA.filiais_mes||[]).filter(r=>idsFiltrados.has(r.ID_FILIAL) && String(r.MES)===mes);
-    const infoMes=(DATA.meses||[]).find(mm=>String(mm.MES)===mes);
-    periodo=infoMes ? infoMes.NOME : DATA.meta.periodo;
+    const mSet=new Set(meses);
+    const linhasRaw=(DATA.filiais_mes||[]).filter(r=>idsFiltrados.has(r.ID_FILIAL)&&mSet.has(r.MES));
+    // Agrupa por filial
+    const byFil=new Map();
+    linhasRaw.forEach(r=>{
+      const v=byFil.get(r.ID_FILIAL)||{ID_FILIAL:r.ID_FILIAL,FAT_REAL:0,FAT_PREV:0,DESP_REAL:0,DESP_PREV:0};
+      v.FAT_REAL+=r.FAT_REAL;v.FAT_PREV+=r.FAT_PREV;v.DESP_REAL+=r.DESP_REAL;v.DESP_PREV+=r.DESP_PREV;
+      byFil.set(r.ID_FILIAL,v);
+    });
+    linhas=[...byFil.values()];
+    // Período textual
+    const nomes=meses.map(m=>(DATA.meses||[]).find(mm=>mm.MES===m)).filter(Boolean).map(mm=>mm.NOME);
+    periodo=meses.length===1?nomes[0]:(nomes.length?`${nomes[0]}-${nomes[nomes.length-1]} ${DATA.meta.ano||''}`.trim():DATA.meta.periodo);
   }else{
     linhas=filiais;
     periodo=DATA.meta.periodo;
@@ -1506,7 +1549,11 @@ function applyOvFilters(){
 function clearOvFilters(){
   document.getElementById('ov-regional').value='';
   document.getElementById('ov-auditor').value='';
-  document.getElementById('ov-mes').value='';
+  // Restaura todos os meses como selecionados
+  document.querySelectorAll('.chk-mes').forEach(c=>c.checked=true);
+  const allChk=document.getElementById('chk-mes-all');
+  if(allChk) allChk.checked=true;
+  _updateMesLabel();
   renderKPIs(DATA.meta);
   updateCardGeral(DATA.meta);
   _syncUrlHash();
@@ -1775,7 +1822,7 @@ async function _processXLSXFile(file){
         _regionaisMap.set(id,{LOJA:r.LOJA||'N/D',REGIONAL:r.REGIONAL||'N/D',AUDITOR:r.AUDITOR||'N/D',SIGLA:r.SIGLA||`F${id}`,GERENTE:r.GERENTE||'N/D',SUPERVISOR:r.SUPERVISOR||'N/D',ESTADO:r.ESTADO||'N/D'});
       });
       addLog(`✅ Base regionais: ${_regionaisMap.size} filiais mapeadas`,'log-ok');
-      if(_lastDespRows){addLog('🔄 Reconstruindo painel com nomes regionais...','');DATA=_buildDataFromRows(_lastDespRows);const _yr=DATA.meta.ano||_extractYear(DATA.meta);_dataByYear[_yr]=DATA;_activeYear=_yr;_updateYearSelector();initAll();_logXLSXSummary();}
+      if(_lastDespRows){addLog('🔄 Reconstruindo painel com nomes regionais...','');DATA=_buildDataFromRows(_lastDespRows);initAll();_logXLSXSummary();}
       else addLog('ℹ️ Agora arraste o Mapa_Despesa.xlsx para carregar os dados financeiros.','');
       return;
     }
@@ -1783,10 +1830,6 @@ async function _processXLSXFile(file){
     addLog(`📋 ${rows.length.toLocaleString('pt-BR')} linhas — processando...`,'');
     _lastDespRows=rows;
     DATA=_buildDataFromRows(rows);
-    const year=DATA.meta.ano||_extractYear(DATA.meta);
-    _dataByYear[year]=DATA;
-    _activeYear=year;
-    _updateYearSelector();
     initAll();
     _logXLSXSummary();
   }catch(err){
@@ -1801,103 +1844,117 @@ function _buildDataFromRows(rows){
   const norm=s=>(s||'').toString().trim().toUpperCase();
   const gr=id=>(_regionaisMap&&_regionaisMap.get(+id))||{};
 
-  // grupo helper: soma field por chave
   function gs(arr,kFn,field){
     const m=new Map();
     for(const r of arr){const k=kFn(r),v=+r[field]||0;m.set(k,(m.get(k)||0)+v);}
     return m;
   }
-  // grupo helper 2 chaves: key = "k1|k2"
   function gs2(arr,k1Fn,k2Fn,field){
     const m=new Map();
     for(const r of arr){const k=`${k1Fn(r)}|${k2Fn(r)}`,v=+r[field]||0;m.set(k,(m.get(k)||0)+v);}
     return m;
   }
 
-  const maxYear=rows.reduce((mx,r)=>Math.max(mx,+r.ANO||0),0);
-  if(!maxYear)throw new Error('Coluna ANO não encontrada ou sem valores.');
-  const d=rows.filter(r=>+r.ANO===maxYear);
-  const fat=d.filter(r=>GR.has(norm(r.GRUPO_CONTA)));
-  const desp=d.filter(r=>!GR.has(norm(r.GRUPO_CONTA)));
-  if(!fat.length)throw new Error('Grupo de receita "01-VENDAS DE MERCADORIAS" não encontrado — verifique a coluna GRUPO_CONTA.');
+  // Detecta todos os anos presentes nos dados
+  const allYears=[...new Set(rows.map(r=>+r.ANO||0).filter(y=>y>0))].sort((a,b)=>a-b);
+  if(!allYears.length)throw new Error('Coluna ANO não encontrada ou sem valores.');
 
-  const mesesCR=[...new Set(fat.filter(r=>+r.VLR_REALIZADO>0).map(r=>+r.MES))].sort((a,b)=>a-b);
-  const mSet=new Set(mesesCR);
-  const periodoStr=mesesCR.length?`${MN[Math.min(...mesesCR)]}-${MN[Math.max(...mesesCR)]} ${maxYear}`:String(maxYear);
-  const fatC=fat.filter(r=>mSet.has(+r.MES));
-  const despC=desp.filter(r=>mSet.has(+r.MES));
+  function _buildYearData(yr){
+    const d=rows.filter(r=>+r.ANO===yr);
+    const fat=d.filter(r=>GR.has(norm(r.GRUPO_CONTA)));
+    const desp=d.filter(r=>!GR.has(norm(r.GRUPO_CONTA)));
+    if(!fat.length) return null;
 
-  // --- Filiais ---
-  const bfFr=gs(fatC, r=>+r.ID_FILIAL,'VLR_REALIZADO');
-  const bfFp=gs(fatC, r=>+r.ID_FILIAL,'VLR_PREVISAO');
-  const bfDr=gs(despC,r=>+r.ID_FILIAL,'VLR_REALIZADO');
-  const bfDp=gs(despC,r=>+r.ID_FILIAL,'VLR_PREVISAO');
-  const fids=[...new Set([...bfFr.keys(),...bfDr.keys()])];
-  const filiais=fids.map(id=>{
-    const m=gr(id);
-    const fr=bfFr.get(id)||0,fp=bfFp.get(id)||0,dr=bfDr.get(id)||0,dp=bfDp.get(id)||0;
-    return{ID_FILIAL:id,SIGLA:m.SIGLA||`F${id}`,LOJA:m.LOJA||`Filial ${id}`,REGIONAL:m.REGIONAL||'N/D',AUDITOR:m.AUDITOR||'N/D',GERENTE:m.GERENTE||'N/D',SUPERVISOR:m.SUPERVISOR||'N/D',ESTADO:m.ESTADO||'N/D',FAT_REAL:fr,FAT_PREV:fp,DESP_REAL:dr,DESP_PREV:dp,PERC_DESP:fr>0?dr/fr*100:0,DESVIO_FAT:fp>0?(fr-fp)/fp*100:0,DESVIO_DESP:dp>0?(dr-dp)/dp*100:0};
-  }).sort((a,b)=>b.FAT_REAL-a.FAT_REAL);
+    const mesesCR=[...new Set(fat.filter(r=>+r.VLR_REALIZADO>0).map(r=>+r.MES))].sort((a,b)=>a-b);
+    const mSet=new Set(mesesCR);
+    const periodoStr=mesesCR.length?`${MN[Math.min(...mesesCR)]}-${MN[Math.max(...mesesCR)]} ${yr}`:String(yr);
+    const fatC=fat.filter(r=>mSet.has(+r.MES));
+    const despC=desp.filter(r=>mSet.has(+r.MES));
 
-  // --- Meses (ano inteiro) ---
-  const bmFr=gs(fat, r=>+r.MES,'VLR_REALIZADO');const bmFp=gs(fat, r=>+r.MES,'VLR_PREVISAO');
-  const bmDr=gs(desp,r=>+r.MES,'VLR_REALIZADO');const bmDp=gs(desp,r=>+r.MES,'VLR_PREVISAO');
-  const allM=[...new Set([...bmFr.keys(),...bmFp.keys()])].sort((a,b)=>a-b);
-  const meses=allM.map(m=>{const fr=bmFr.get(m)||0;return{MES:m,NOME:MN[m]||`M${m}`,FAT_REAL:fr,FAT_PREV:bmFp.get(m)||0,DESP_REAL:bmDr.get(m)||0,DESP_PREV:bmDp.get(m)||0,PERC_DESP:fr>0?(bmDr.get(m)||0)/fr*100:0};});
+    // Filiais
+    const bfFr=gs(fatC, r=>+r.ID_FILIAL,'VLR_REALIZADO');
+    const bfFp=gs(fatC, r=>+r.ID_FILIAL,'VLR_PREVISAO');
+    const bfDr=gs(despC,r=>+r.ID_FILIAL,'VLR_REALIZADO');
+    const bfDp=gs(despC,r=>+r.ID_FILIAL,'VLR_PREVISAO');
+    const fids=[...new Set([...bfFr.keys(),...bfDr.keys()])];
+    const filiais=fids.map(id=>{
+      const m=gr(id);
+      const fr=bfFr.get(id)||0,fp=bfFp.get(id)||0,dr=bfDr.get(id)||0,dp=bfDp.get(id)||0;
+      return{ID_FILIAL:id,SIGLA:m.SIGLA||`F${id}`,LOJA:m.LOJA||`Filial ${id}`,REGIONAL:m.REGIONAL||'N/D',AUDITOR:m.AUDITOR||'N/D',GERENTE:m.GERENTE||'N/D',SUPERVISOR:m.SUPERVISOR||'N/D',ESTADO:m.ESTADO||'N/D',FAT_REAL:fr,FAT_PREV:fp,DESP_REAL:dr,DESP_PREV:dp,PERC_DESP:fr>0?dr/fr*100:0,DESVIO_FAT:fp>0?(fr-fp)/fp*100:0,DESVIO_DESP:dp>0?(dr-dp)/dp*100:0};
+    }).sort((a,b)=>b.FAT_REAL-a.FAT_REAL);
 
-  // --- Filiais × Meses (ano inteiro, para filtro de mês no overview) ---
-  const fmFr=gs2(fat, r=>+r.ID_FILIAL,r=>+r.MES,'VLR_REALIZADO');
-  const fmFp=gs2(fat, r=>+r.ID_FILIAL,r=>+r.MES,'VLR_PREVISAO');
-  const fmDr=gs2(desp,r=>+r.ID_FILIAL,r=>+r.MES,'VLR_REALIZADO');
-  const fmDp=gs2(desp,r=>+r.ID_FILIAL,r=>+r.MES,'VLR_PREVISAO');
-  const fmKeys=[...new Set([...fat,...desp].map(r=>`${+r.ID_FILIAL}|${+r.MES}`))];
-  const filiais_mes=fmKeys.map(k=>{const[id,m]=k.split('|').map(Number);return{ID_FILIAL:id,MES:m,FAT_REAL:fmFr.get(k)||0,FAT_PREV:fmFp.get(k)||0,DESP_REAL:fmDr.get(k)||0,DESP_PREV:fmDp.get(k)||0};});
+    // Meses (ano inteiro)
+    const bmFr=gs(fat, r=>+r.MES,'VLR_REALIZADO');const bmFp=gs(fat, r=>+r.MES,'VLR_PREVISAO');
+    const bmDr=gs(desp,r=>+r.MES,'VLR_REALIZADO');const bmDp=gs(desp,r=>+r.MES,'VLR_PREVISAO');
+    const allM=[...new Set([...bmFr.keys(),...bmFp.keys()])].sort((a,b)=>a-b);
+    const meses=allM.map(m=>{const fr=bmFr.get(m)||0;return{MES:m,NOME:MN[m]||`M${m}`,FAT_REAL:fr,FAT_PREV:bmFp.get(m)||0,DESP_REAL:bmDr.get(m)||0,DESP_PREV:bmDp.get(m)||0,PERC_DESP:fr>0?(bmDr.get(m)||0)/fr*100:0};});
 
-  // --- Regionais ---
-  const rk=r=>gr(+r.ID_FILIAL).REGIONAL||'N/D';
-  const brFr=gs(fatC, rk,'VLR_REALIZADO');const brFp=gs(fatC, rk,'VLR_PREVISAO');
-  const brDr=gs(despC,rk,'VLR_REALIZADO');const brDp=gs(despC,rk,'VLR_PREVISAO');
-  const regK=[...new Set([...brFr.keys(),...brDr.keys()])];
-  const regionais=regK.map(reg=>{const fr=brFr.get(reg)||0;return{REGIONAL:reg,FAT_REAL:fr,FAT_PREV:brFp.get(reg)||0,DESP_REAL:brDr.get(reg)||0,DESP_PREV:brDp.get(reg)||0,PERC_DESP:fr>0?(brDr.get(reg)||0)/fr*100:0};});
+    // Filiais × Meses
+    const fmFr=gs2(fat, r=>+r.ID_FILIAL,r=>+r.MES,'VLR_REALIZADO');
+    const fmFp=gs2(fat, r=>+r.ID_FILIAL,r=>+r.MES,'VLR_PREVISAO');
+    const fmDr=gs2(desp,r=>+r.ID_FILIAL,r=>+r.MES,'VLR_REALIZADO');
+    const fmDp=gs2(desp,r=>+r.ID_FILIAL,r=>+r.MES,'VLR_PREVISAO');
+    const fmKeys=[...new Set([...fat,...desp].map(r=>`${+r.ID_FILIAL}|${+r.MES}`))];
+    const filiais_mes=fmKeys.map(k=>{const[id,m]=k.split('|').map(Number);return{ID_FILIAL:id,MES:m,FAT_REAL:fmFr.get(k)||0,FAT_PREV:fmFp.get(k)||0,DESP_REAL:fmDr.get(k)||0,DESP_PREV:fmDp.get(k)||0};});
 
-  // --- Auditores ---
-  const ak=r=>gr(+r.ID_FILIAL).AUDITOR||'N/D';
-  const baFr=gs(fatC, ak,'VLR_REALIZADO');const baFp=gs(fatC, ak,'VLR_PREVISAO');
-  const baDr=gs(despC,ak,'VLR_REALIZADO');const baDp=gs(despC,ak,'VLR_PREVISAO');
-  const audK=[...new Set([...baFr.keys(),...baDr.keys()])];
-  const auditores=audK.map(aud=>{const fr=baFr.get(aud)||0;return{AUDITOR:aud,FAT_REAL:fr,FAT_PREV:baFp.get(aud)||0,DESP_REAL:baDr.get(aud)||0,DESP_PREV:baDp.get(aud)||0,PERC_DESP:fr>0?(baDr.get(aud)||0)/fr*100:0};});
+    // Regionais
+    const rk=r=>gr(+r.ID_FILIAL).REGIONAL||'N/D';
+    const brFr=gs(fatC, rk,'VLR_REALIZADO');const brFp=gs(fatC, rk,'VLR_PREVISAO');
+    const brDr=gs(despC,rk,'VLR_REALIZADO');const brDp=gs(despC,rk,'VLR_PREVISAO');
+    const regK=[...new Set([...brFr.keys(),...brDr.keys()])];
+    const regionais=regK.map(reg=>{const fr=brFr.get(reg)||0;return{REGIONAL:reg,FAT_REAL:fr,FAT_PREV:brFp.get(reg)||0,DESP_REAL:brDr.get(reg)||0,DESP_PREV:brDp.get(reg)||0,PERC_DESP:fr>0?(brDr.get(reg)||0)/fr*100:0};});
 
-  // --- Grupos de conta (despesa, período comparável) ---
-  const gck=r=>(r.GRUPO_CONTA||'').toString().trim();
-  const bgDr=gs(despC,gck,'VLR_REALIZADO');const bgDp=gs(despC,gck,'VLR_PREVISAO');
-  const grupos=[...bgDr.keys()].map(gc=>{const dr=bgDr.get(gc)||0,dp=bgDp.get(gc)||0;return{GRUPO_CONTA:gc,DESP_REAL:dr,DESP_PREV:dp,DESVIO:dp>0?(dr-dp)/dp*100:0};}).sort((a,b)=>b.DESP_REAL-a.DESP_REAL);
+    // Auditores
+    const ak=r=>gr(+r.ID_FILIAL).AUDITOR||'N/D';
+    const baFr=gs(fatC, ak,'VLR_REALIZADO');const baFp=gs(fatC, ak,'VLR_PREVISAO');
+    const baDr=gs(despC,ak,'VLR_REALIZADO');const baDp=gs(despC,ak,'VLR_PREVISAO');
+    const audK=[...new Set([...baFr.keys(),...baDr.keys()])];
+    const auditores=audK.map(aud=>{const fr=baFr.get(aud)||0;return{AUDITOR:aud,FAT_REAL:fr,FAT_PREV:baFp.get(aud)||0,DESP_REAL:baDr.get(aud)||0,DESP_PREV:baDp.get(aud)||0,PERC_DESP:fr>0?(baDr.get(aud)||0)/fr*100:0};});
 
-  // --- grupos_filial: despesa por filial × grupo_conta ---
-  const gfMap = new Map();
-  despC.forEach(r=>{
-    const key=`${+r.ID_FILIAL}|||${(r.GRUPO_CONTA||'').toString().trim()}`;
-    const v=gfMap.get(key)||{ID_FILIAL:+r.ID_FILIAL,GRUPO_CONTA:(r.GRUPO_CONTA||'').toString().trim(),DESP_REAL:0,DESP_PREV:0};
-    v.DESP_REAL+=(+r.VLR_REALIZADO||0);
-    v.DESP_PREV+=(+r.VLR_PREVISAO||0);
-    gfMap.set(key,v);
+    // Grupos de conta
+    const gck=r=>(r.GRUPO_CONTA||'').toString().trim();
+    const bgDr=gs(despC,gck,'VLR_REALIZADO');const bgDp=gs(despC,gck,'VLR_PREVISAO');
+    const grupos=[...bgDr.keys()].map(gc=>{const dr=bgDr.get(gc)||0,dp=bgDp.get(gc)||0;return{GRUPO_CONTA:gc,DESP_REAL:dr,DESP_PREV:dp,DESVIO:dp>0?(dr-dp)/dp*100:0};}).sort((a,b)=>b.DESP_REAL-a.DESP_REAL);
+
+    // grupos_filial
+    const gfMap=new Map();
+    despC.forEach(r=>{
+      const key=`${+r.ID_FILIAL}|||${(r.GRUPO_CONTA||'').toString().trim()}`;
+      const v=gfMap.get(key)||{ID_FILIAL:+r.ID_FILIAL,GRUPO_CONTA:(r.GRUPO_CONTA||'').toString().trim(),DESP_REAL:0,DESP_PREV:0};
+      v.DESP_REAL+=(+r.VLR_REALIZADO||0);v.DESP_PREV+=(+r.VLR_PREVISAO||0);
+      gfMap.set(key,v);
+    });
+    const grupos_filial=[...gfMap.values()];
+
+    // Meta
+    const tFr=fatC.reduce((s,r)=>s+(+r.VLR_REALIZADO||0),0);
+    const tFp=fatC.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
+    const tDr=despC.reduce((s,r)=>s+(+r.VLR_REALIZADO||0),0);
+    const tDp=despC.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
+    const tFpA=fat.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
+    const tDpA=desp.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
+    const meta={periodo:periodoStr,ano:yr,filiais_count:filiais.length,tot_fat_real:tFr,tot_fat_prev:tFp,tot_desp_real:tDr,tot_desp_prev:tDp,tot_fat_prev_ano:tFpA,tot_desp_prev_ano:tDpA,perc_desp_real:tFr>0?tDr/tFr*100:0,perc_desp_plan:tFp>0?tDp/tFp*100:0,resultado:tFr-tDr,dev_fat:tFp>0?(tFr-tFp)/tFp*100:0,dev_desp:tDp>0?(tDr-tDp)/tDp*100:0};
+    return{meta,filiais,meses,filiais_mes,regionais,auditores,grupos,grupos_filial};
+  }
+
+  // Processa cada ano e armazena em _dataByYear
+  _dataByYear={};
+  allYears.forEach(yr=>{
+    const d=_buildYearData(yr);
+    if(d) _dataByYear[yr]=d;
   });
-  const grupos_filial=[...gfMap.values()];
-
-  // --- Meta ---
-  const tFr=fatC.reduce((s,r)=>s+(+r.VLR_REALIZADO||0),0);
-  const tFp=fatC.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
-  const tDr=despC.reduce((s,r)=>s+(+r.VLR_REALIZADO||0),0);
-  const tDp=despC.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
-  const tFpA=fat.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
-  const tDpA=desp.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
-  const meta={periodo:periodoStr,ano:maxYear,filiais_count:filiais.length,tot_fat_real:tFr,tot_fat_prev:tFp,tot_desp_real:tDr,tot_desp_prev:tDp,tot_fat_prev_ano:tFpA,tot_desp_prev_ano:tDpA,perc_desp_real:tFr>0?tDr/tFr*100:0,perc_desp_plan:tFp>0?tDp/tFp*100:0,resultado:tFr-tDr,dev_fat:tFp>0?(tFr-tFp)/tFp*100:0,dev_desp:tDp>0?(tDr-tDp)/tDp*100:0};
-  return{meta,filiais,meses,filiais_mes,regionais,auditores,grupos,grupos_filial};
+  const maxYear=Math.max(...Object.keys(_dataByYear).map(Number));
+  _activeYear=maxYear;
+  _updateYearSelector();
+  return _dataByYear[maxYear];
 }
 
 function _logXLSXSummary(){
   const m=DATA.meta;
   if(!_regionaisMap||!_regionaisMap.size) addLog('ℹ️ Sem Base_regionais.xlsx — LOJA/REGIONAL/AUDITOR como "N/D". Arraste também o Base_regionais.xlsx para nomes completos.','');
   addLog('✅ Excel carregado com sucesso!','log-ok');
+  const anos=Object.keys(_dataByYear).sort();
+  if(anos.length>1) addLog(`📅 Anos detectados: ${anos.join(', ')} — use o filtro de ano para alternar.`,'log-ok');
   addLog(`📊 ${m.filiais_count} filiais | ${m.periodo}`,'log-ok');
   addLog(`💰 Fat. Real: ${fmtM(m.tot_fat_real)}`,'log-ok');
   addLog(`📤 Desp. Real: ${fmtM(m.tot_desp_real)}`,'log-ok');
@@ -1990,15 +2047,32 @@ function _setActiveYear(year){
   _activeYear=year;
   DATA=_dataByYear[year];
   document.querySelectorAll('.year-pill').forEach(p=>p.classList.toggle('active',+p.dataset.year===year));
+  // Atualiza radio e label do filtro de ano
+  document.querySelectorAll('input[name="chk-ano"]').forEach(r=>r.checked=(+r.value===year));
+  const anoLabel=document.getElementById('dd-ano-label');
+  if(anoLabel) anoLabel.textContent=year;
   initAll();
 }
 
 function _updateYearSelector(){
   const years=Object.keys(_dataByYear).map(Number).sort((a,b)=>b-a);
   const sel=document.getElementById('year-selector');
-  if(!sel) return;
-  sel.style.display=years.length>1?'flex':'none';
-  sel.innerHTML=years.map(y=>`<button class="year-pill${y===_activeYear?' active':''}" data-year="${y}" onclick="_setActiveYear(${y})">${y}</button>`).join('');
+  if(sel){
+    sel.style.display=years.length>1?'flex':'none';
+    sel.innerHTML=years.map(y=>`<button class="year-pill${y===_activeYear?' active':''}" data-year="${y}" onclick="_setActiveYear(${y})">${y}</button>`).join('');
+  }
+  // Popula dropdown de ano no filtro
+  const fgYear=document.getElementById('fg-year');
+  const anoPanel=document.getElementById('dd-ano-panel');
+  const anoLabel=document.getElementById('dd-ano-label');
+  if(fgYear) fgYear.style.display=years.length>1?'':'none';
+  if(anoPanel){
+    anoPanel.innerHTML=years.map(y=>`
+      <label class="chk-dd-item">
+        <input type="radio" name="chk-ano" value="${y}"${y===_activeYear?' checked':''} onchange="onChkAno(${y})"> ${y}
+      </label>`).join('');
+  }
+  if(anoLabel) anoLabel.textContent=_activeYear||'—';
 }
 
 // =========================================================
@@ -2671,6 +2745,62 @@ function exportComparativoXLS(){
 }
 
 // =========================================================
+// =========================================================
+// CHECKBOX DROPDOWN — helpers
+// =========================================================
+function toggleChkDropdown(id){
+  const panel=document.getElementById(id+'-panel');
+  if(!panel) return;
+  const isOpen=panel.classList.contains('open');
+  // Fecha todos os outros dropdowns
+  document.querySelectorAll('.chk-dd-panel.open').forEach(p=>p.classList.remove('open'));
+  if(!isOpen) panel.classList.add('open');
+}
+
+// Fecha dropdown ao clicar fora
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.chk-dropdown')){
+    document.querySelectorAll('.chk-dd-panel.open').forEach(p=>p.classList.remove('open'));
+  }
+});
+
+function onChkMesAll(el){
+  document.querySelectorAll('.chk-mes').forEach(c=>c.checked=el.checked);
+  _updateMesLabel();
+  applyOvFilters();
+}
+
+function onChkMes(el){
+  const all=document.querySelectorAll('.chk-mes');
+  const checked=[...all].filter(c=>c.checked);
+  const allChk=document.getElementById('chk-mes-all');
+  if(allChk) allChk.checked=checked.length===all.length;
+  _updateMesLabel();
+  applyOvFilters();
+}
+
+function onChkAno(year){
+  _setActiveYear(year);
+}
+
+function _getCheckedMeses(){
+  return [...document.querySelectorAll('.chk-mes:checked')].map(c=>+c.value);
+}
+
+function _updateMesLabel(){
+  const all=document.querySelectorAll('.chk-mes');
+  const checked=[...document.querySelectorAll('.chk-mes:checked')];
+  const lbl=document.getElementById('dd-mes-label');
+  if(!lbl) return;
+  if(!all.length||checked.length===all.length){lbl.textContent='Todos';return;}
+  if(checked.length===0){lbl.textContent='Nenhum';return;}
+  if(checked.length===1){
+    const m=(DATA&&DATA.meses||[]).find(mm=>mm.MES===+checked[0].value);
+    lbl.textContent=m?m.NOME:checked[0].value;return;
+  }
+  lbl.textContent=`${checked.length} meses`;
+}
+
 // URL HASH — persistência de filtros da Visão Geral
 // =========================================================
 let _firstLoad=true;
@@ -2678,11 +2808,11 @@ let _firstLoad=true;
 function _syncUrlHash(){
   const reg=document.getElementById('ov-regional').value;
   const aud=document.getElementById('ov-auditor').value;
-  const mes=document.getElementById('ov-mes').value;
+  const meses=_getCheckedMeses();
   const p=new URLSearchParams();
   if(reg)p.set('regional',reg);
   if(aud)p.set('auditor',aud);
-  if(mes)p.set('mes',mes);
+  if(meses.length) p.set('mes',meses.join(','));
   const s=p.toString();
   history.replaceState(null,'',location.pathname+location.search+(s?'#'+s:''));
 }
@@ -2693,10 +2823,18 @@ function _applyUrlFilters(){
   const p=new URLSearchParams(hash);
   const reg=p.get('regional')||'';
   const aud=p.get('auditor')||'';
-  const mes=p.get('mes')||'';
-  if(!reg&&!aud&&!mes)return;
+  const mesStr=p.get('mes')||'';
+  if(!reg&&!aud&&!mesStr)return;
   const sel=(id,val)=>{const el=document.getElementById(id);if(el)[...el.options].forEach(o=>o.selected=o.value===val);};
-  sel('ov-regional',reg);sel('ov-auditor',aud);sel('ov-mes',mes);
+  sel('ov-regional',reg);sel('ov-auditor',aud);
+  if(mesStr){
+    const mSet=new Set(mesStr.split(',').map(Number));
+    document.querySelectorAll('.chk-mes').forEach(c=>c.checked=mSet.has(+c.value));
+    const allChk=document.getElementById('chk-mes-all');
+    const totalMeses=document.querySelectorAll('.chk-mes').length;
+    if(allChk) allChk.checked=mSet.size===totalMeses;
+    _updateMesLabel();
+  }
   applyOvFilters();
 }
 
