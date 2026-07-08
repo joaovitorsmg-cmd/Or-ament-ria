@@ -6,6 +6,7 @@
 <title>Painel Orçamentário Agroquima 2026</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
   color-scheme: light dark;
@@ -626,21 +627,32 @@ tbody tr:hover{background:var(--row-hover)}
     ondragleave="this.classList.remove('drag')"
     ondrop="handleDrop(event)">
     <div style="font-size:40px;margin-bottom:10px">📂</div>
-    <p>Clique ou arraste o arquivo JSON de dados aqui</p>
-    <small>Formato: aqm_data.json gerado pelo script Python<br>Suporta 2025, 2026 parcial ou completo</small>
-    <input type="file" id="file-input" accept=".json" style="display:none" onchange="handleFileUpload(event)">
+    <p>Clique ou arraste o arquivo Excel ou JSON aqui</p>
+    <small>Arraste <strong>Mapa_Despesa.xlsx</strong> (e opcionalmente <strong>Base_regionais.xlsx</strong>)<br>ou o <strong>aqm_data.json</strong> gerado pelo script Python</small>
+    <input type="file" id="file-input" accept=".json,.xlsx,.xls" multiple style="display:none" onchange="handleFileUpload(event)">
   </div>
   <div class="upload-log" id="upload-log">
     <div class="log-line" style="color:#888">Aguardando arquivo...</div>
   </div>
   <div style="margin-top:16px;background:var(--branco);border-radius:8px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
-    <div class="section-title" style="font-size:13px">📌 Instruções</div>
-    <ol style="font-size:12px;line-height:1.8;padding-left:20px;color:#555">
-      <li>Abra o arquivo <code>Mapa_Despesa_2026.xlsx</code> atualizado</li>
-      <li>Execute o script Python <strong>gerar_json.py</strong> (receba ao lado)</li>
-      <li>Arraste o arquivo <code>aqm_data.json</code> gerado aqui</li>
-      <li>O painel atualiza automaticamente sem perder configurações</li>
-    </ol>
+    <div class="section-title" style="font-size:13px">📌 Como atualizar</div>
+    <div style="font-size:12px;line-height:1.8;color:var(--cinza)">
+      <div style="margin-bottom:12px">
+        <strong style="color:var(--accent-text)">✨ Direto pelo Excel (sem Python):</strong>
+        <ol style="padding-left:20px;margin:4px 0;color:var(--text-muted)">
+          <li>Arraste o <code>Mapa_Despesa.xlsx</code> atualizado na área acima</li>
+          <li>Opcionalmente também o <code>Base_regionais.xlsx</code> para nomes de filial/regional/auditor</li>
+          <li>O painel atualiza automaticamente</li>
+        </ol>
+      </div>
+      <div>
+        <strong style="color:var(--text-muted)">🐍 Alternativa — script Python:</strong>
+        <ol style="padding-left:20px;margin:4px 0;color:var(--text-muted)">
+          <li>Execute o <strong>gerar_json.py</strong> na sua planilha</li>
+          <li>Arraste o <code>aqm_data.json</code> gerado aqui</li>
+        </ol>
+      </div>
+    </div>
     <div style="margin-top:12px">
       <button class="btn btn-primary" onclick="downloadGenScript()">⬇️ Baixar gerar_json.py</button>
     </div>
@@ -654,6 +666,8 @@ tbody tr:hover{background:var(--row-hover)}
 let DATA = null;
 let charts_reg = {};
 let HIDE_AUDITOR = false;
+let _regionaisMap = null; // Map<Number, {LOJA,REGIONAL,AUDITOR,SIGLA,GERENTE,SUPERVISOR,ESTADO}>
+let _lastDespRows = null; // rows brutas do último xlsx de despesa (para rebuild ao carregar regionais)
 
 // Filiais com estrutura especial: compartilham CNPJ com polo industrial/fábrica.
 // As despesas dessas filiais incluem custos industriais que não são comparáveis
@@ -790,10 +804,10 @@ async function loadData(src){
 // "Atualizar Base". Isso é esperado, não é um erro do painel.
 function showNoDataState(){
   document.getElementById('hd-periodo').textContent = 'Nenhuma base carregada';
-  document.getElementById('hd-filiais').textContent = 'importe o aqm_data.json';
+  document.getElementById('hd-filiais').textContent = 'importe o .xlsx';
   switchTab('tab-upload');
   addLog('👋 Nenhuma base carregada ainda neste navegador — isso é normal, os dados não ficam salvos no site por segurança.', '');
-  addLog('1) Baixe o gerar_json.py abaixo → 2) rode na sua planilha → 3) arraste o aqm_data.json gerado na área acima.', 'log-ok');
+  addLog('Arraste o Mapa_Despesa.xlsx (e opcionalmente Base_regionais.xlsx) na área acima — ou o aqm_data.json gerado pelo Python.', 'log-ok');
 }
 
 function initAll(){
@@ -1536,43 +1550,184 @@ async function exportAllCards(){
 function printPainel(){window.print();}
 
 // =========================================================
-// UPLOAD
+// UPLOAD — suporta .xlsx (Mapa_Despesa + Base_regionais) e .json legado
 // =========================================================
 function handleDrop(e){
   e.preventDefault();
   document.getElementById('drop-zone').classList.remove('drag');
-  const f=e.dataTransfer.files[0];
-  if(f)processUploadFile(f);
+  const files=[...e.dataTransfer.files];
+  if(files.length) processFiles(files);
 }
 
 function handleFileUpload(e){
-  const f=e.target.files[0];
-  if(f)processUploadFile(f);
+  const files=[...e.target.files];
+  if(files.length) processFiles(files);
+  e.target.value=''; // permite re-selecionar o mesmo arquivo
 }
 
-function processUploadFile(file){
-  const log=document.getElementById('upload-log');
-  log.innerHTML='';
-  addLog(`📂 Arquivo: ${file.name} (${(file.size/1024).toFixed(1)} KB)`, '');
-  const reader=new FileReader();
-  reader.onload=ev=>{
-    try{
-      const newData=JSON.parse(ev.target.result);
-      if(!newData.meta||!newData.filiais){
-        addLog('❌ Formato inválido. Verifique o arquivo JSON.','log-err');return;
-      }
-      DATA=newData;
-      initAll();
-      addLog('✅ Dados carregados com sucesso!','log-ok');
-      addLog(`📊 ${newData.meta.filiais_count} filiais | ${newData.meta.periodo}`,'log-ok');
-      addLog(`💰 Fat. Real: ${fmtM(newData.meta.tot_fat_real)}`,'log-ok');
-      addLog(`📤 Desp. Real: ${fmtM(newData.meta.tot_desp_real)}`,'log-ok');
-      addLog(`⚖️ Resultado: ${fmtM(newData.meta.resultado)}`,'log-ok');
-    }catch(err){
-      addLog('❌ Erro ao processar JSON: '+err.message,'log-err');
+async function processFiles(files){
+  document.getElementById('upload-log').innerHTML='';
+  for(const file of files){
+    const ext=file.name.split('.').pop().toLowerCase();
+    if(ext==='json') await _processJSONFile(file);
+    else if(ext==='xlsx'||ext==='xls') await _processXLSXFile(file);
+    else addLog(`❌ Formato não suportado: ${file.name}`,'log-err');
+  }
+}
+
+async function _processJSONFile(file){
+  addLog(`📂 JSON: ${file.name} (${(file.size/1024).toFixed(1)} KB)`,'');
+  return new Promise(resolve=>{
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try{
+        const nd=JSON.parse(ev.target.result);
+        if(!nd.meta||!nd.filiais){addLog('❌ Formato inválido. Verifique o arquivo JSON.','log-err');resolve();return;}
+        DATA=nd; initAll();
+        addLog('✅ JSON carregado com sucesso!','log-ok');
+        addLog(`📊 ${nd.meta.filiais_count} filiais | ${nd.meta.periodo}`,'log-ok');
+        addLog(`💰 Fat. Real: ${fmtM(nd.meta.tot_fat_real)}`,'log-ok');
+        addLog(`📤 Desp. Real: ${fmtM(nd.meta.tot_desp_real)}`,'log-ok');
+        addLog(`⚖️ Resultado: ${fmtM(nd.meta.resultado)}`,'log-ok');
+      }catch(err){addLog('❌ Erro ao processar JSON: '+err.message,'log-err');}
+      resolve();
+    };
+    reader.readAsText(file);
+  });
+}
+
+async function _processXLSXFile(file){
+  addLog(`📊 Excel: ${file.name} (${(file.size/1024).toFixed(1)} KB)`,'');
+  try{
+    addLog('⏳ Lendo planilha...','');
+    const buf=await file.arrayBuffer();
+    const wb=XLSX.read(buf,{type:'array'});
+    const sheet=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(sheet,{defval:''});
+    if(!rows.length){addLog('❌ Planilha vazia.','log-err');return;}
+    const cols=Object.keys(rows[0]);
+    const isReg=cols.includes('LOJA')&&(cols.includes('FILIAL')||cols.includes('ID_FILIAL'))&&!cols.includes('VLR_REALIZADO');
+    const isDesp=cols.includes('VLR_REALIZADO')||cols.includes('VLR_PREVISAO');
+    if(isReg){
+      _regionaisMap=new Map();
+      rows.forEach(r=>{
+        const id=+(r.FILIAL||r.ID_FILIAL||0);
+        if(!id)return;
+        _regionaisMap.set(id,{LOJA:r.LOJA||'N/D',REGIONAL:r.REGIONAL||'N/D',AUDITOR:r.AUDITOR||'N/D',SIGLA:r.SIGLA||`F${id}`,GERENTE:r.GERENTE||'N/D',SUPERVISOR:r.SUPERVISOR||'N/D',ESTADO:r.ESTADO||'N/D'});
+      });
+      addLog(`✅ Base regionais: ${_regionaisMap.size} filiais mapeadas`,'log-ok');
+      if(_lastDespRows){addLog('🔄 Reconstruindo painel com nomes regionais...','');DATA=_buildDataFromRows(_lastDespRows);initAll();_logXLSXSummary();}
+      else addLog('ℹ️ Agora arraste o Mapa_Despesa.xlsx para carregar os dados financeiros.','');
+      return;
     }
-  };
-  reader.readAsText(file);
+    if(!isDesp){addLog(`❌ Colunas não reconhecidas em "${file.name}". Esperado: VLR_REALIZADO/VLR_PREVISAO (despesa) ou LOJA/FILIAL (regionais).`,'log-err');return;}
+    addLog(`📋 ${rows.length.toLocaleString('pt-BR')} linhas — processando...`,'');
+    _lastDespRows=rows;
+    DATA=_buildDataFromRows(rows);
+    initAll();
+    _logXLSXSummary();
+  }catch(err){
+    addLog('❌ Erro ao processar Excel: '+err.message,'log-err');
+    console.error(err);
+  }
+}
+
+function _buildDataFromRows(rows){
+  const MN={1:'Jan',2:'Fev',3:'Mar',4:'Abr',5:'Mai',6:'Jun',7:'Jul',8:'Ago',9:'Set',10:'Out',11:'Nov',12:'Dez'};
+  const GR=new Set(['01-VENDAS DE MERCADORIAS']);
+  const norm=s=>(s||'').toString().trim().toUpperCase();
+  const gr=id=>(_regionaisMap&&_regionaisMap.get(+id))||{};
+
+  // grupo helper: soma field por chave
+  function gs(arr,kFn,field){
+    const m=new Map();
+    for(const r of arr){const k=kFn(r),v=+r[field]||0;m.set(k,(m.get(k)||0)+v);}
+    return m;
+  }
+  // grupo helper 2 chaves: key = "k1|k2"
+  function gs2(arr,k1Fn,k2Fn,field){
+    const m=new Map();
+    for(const r of arr){const k=`${k1Fn(r)}|${k2Fn(r)}`,v=+r[field]||0;m.set(k,(m.get(k)||0)+v);}
+    return m;
+  }
+
+  const maxYear=rows.reduce((mx,r)=>Math.max(mx,+r.ANO||0),0);
+  if(!maxYear)throw new Error('Coluna ANO não encontrada ou sem valores.');
+  const d=rows.filter(r=>+r.ANO===maxYear);
+  const fat=d.filter(r=>GR.has(norm(r.GRUPO_CONTA)));
+  const desp=d.filter(r=>!GR.has(norm(r.GRUPO_CONTA)));
+  if(!fat.length)throw new Error('Grupo de receita "01-VENDAS DE MERCADORIAS" não encontrado — verifique a coluna GRUPO_CONTA.');
+
+  const mesesCR=[...new Set(fat.filter(r=>+r.VLR_REALIZADO>0).map(r=>+r.MES))].sort((a,b)=>a-b);
+  const mSet=new Set(mesesCR);
+  const periodoStr=mesesCR.length?`${MN[Math.min(...mesesCR)]}-${MN[Math.max(...mesesCR)]} ${maxYear}`:String(maxYear);
+  const fatC=fat.filter(r=>mSet.has(+r.MES));
+  const despC=desp.filter(r=>mSet.has(+r.MES));
+
+  // --- Filiais ---
+  const bfFr=gs(fatC, r=>+r.ID_FILIAL,'VLR_REALIZADO');
+  const bfFp=gs(fatC, r=>+r.ID_FILIAL,'VLR_PREVISAO');
+  const bfDr=gs(despC,r=>+r.ID_FILIAL,'VLR_REALIZADO');
+  const bfDp=gs(despC,r=>+r.ID_FILIAL,'VLR_PREVISAO');
+  const fids=[...new Set([...bfFr.keys(),...bfDr.keys()])];
+  const filiais=fids.map(id=>{
+    const m=gr(id);
+    const fr=bfFr.get(id)||0,fp=bfFp.get(id)||0,dr=bfDr.get(id)||0,dp=bfDp.get(id)||0;
+    return{ID_FILIAL:id,SIGLA:m.SIGLA||`F${id}`,LOJA:m.LOJA||`Filial ${id}`,REGIONAL:m.REGIONAL||'N/D',AUDITOR:m.AUDITOR||'N/D',GERENTE:m.GERENTE||'N/D',SUPERVISOR:m.SUPERVISOR||'N/D',ESTADO:m.ESTADO||'N/D',FAT_REAL:fr,FAT_PREV:fp,DESP_REAL:dr,DESP_PREV:dp,PERC_DESP:fr>0?dr/fr*100:0,DESVIO_FAT:fp>0?(fr-fp)/fp*100:0,DESVIO_DESP:dp>0?(dr-dp)/dp*100:0};
+  }).sort((a,b)=>b.FAT_REAL-a.FAT_REAL);
+
+  // --- Meses (ano inteiro) ---
+  const bmFr=gs(fat, r=>+r.MES,'VLR_REALIZADO');const bmFp=gs(fat, r=>+r.MES,'VLR_PREVISAO');
+  const bmDr=gs(desp,r=>+r.MES,'VLR_REALIZADO');const bmDp=gs(desp,r=>+r.MES,'VLR_PREVISAO');
+  const allM=[...new Set([...bmFr.keys(),...bmFp.keys()])].sort((a,b)=>a-b);
+  const meses=allM.map(m=>{const fr=bmFr.get(m)||0;return{MES:m,NOME:MN[m]||`M${m}`,FAT_REAL:fr,FAT_PREV:bmFp.get(m)||0,DESP_REAL:bmDr.get(m)||0,DESP_PREV:bmDp.get(m)||0,PERC_DESP:fr>0?(bmDr.get(m)||0)/fr*100:0};});
+
+  // --- Filiais × Meses (ano inteiro, para filtro de mês no overview) ---
+  const fmFr=gs2(fat, r=>+r.ID_FILIAL,r=>+r.MES,'VLR_REALIZADO');
+  const fmFp=gs2(fat, r=>+r.ID_FILIAL,r=>+r.MES,'VLR_PREVISAO');
+  const fmDr=gs2(desp,r=>+r.ID_FILIAL,r=>+r.MES,'VLR_REALIZADO');
+  const fmDp=gs2(desp,r=>+r.ID_FILIAL,r=>+r.MES,'VLR_PREVISAO');
+  const fmKeys=[...new Set([...fat,...desp].map(r=>`${+r.ID_FILIAL}|${+r.MES}`))];
+  const filiais_mes=fmKeys.map(k=>{const[id,m]=k.split('|').map(Number);return{ID_FILIAL:id,MES:m,FAT_REAL:fmFr.get(k)||0,FAT_PREV:fmFp.get(k)||0,DESP_REAL:fmDr.get(k)||0,DESP_PREV:fmDp.get(k)||0};});
+
+  // --- Regionais ---
+  const rk=r=>gr(+r.ID_FILIAL).REGIONAL||'N/D';
+  const brFr=gs(fatC, rk,'VLR_REALIZADO');const brFp=gs(fatC, rk,'VLR_PREVISAO');
+  const brDr=gs(despC,rk,'VLR_REALIZADO');const brDp=gs(despC,rk,'VLR_PREVISAO');
+  const regK=[...new Set([...brFr.keys(),...brDr.keys()])];
+  const regionais=regK.map(reg=>{const fr=brFr.get(reg)||0;return{REGIONAL:reg,FAT_REAL:fr,FAT_PREV:brFp.get(reg)||0,DESP_REAL:brDr.get(reg)||0,DESP_PREV:brDp.get(reg)||0,PERC_DESP:fr>0?(brDr.get(reg)||0)/fr*100:0};});
+
+  // --- Auditores ---
+  const ak=r=>gr(+r.ID_FILIAL).AUDITOR||'N/D';
+  const baFr=gs(fatC, ak,'VLR_REALIZADO');const baFp=gs(fatC, ak,'VLR_PREVISAO');
+  const baDr=gs(despC,ak,'VLR_REALIZADO');const baDp=gs(despC,ak,'VLR_PREVISAO');
+  const audK=[...new Set([...baFr.keys(),...baDr.keys()])];
+  const auditores=audK.map(aud=>{const fr=baFr.get(aud)||0;return{AUDITOR:aud,FAT_REAL:fr,FAT_PREV:baFp.get(aud)||0,DESP_REAL:baDr.get(aud)||0,DESP_PREV:baDp.get(aud)||0,PERC_DESP:fr>0?(baDr.get(aud)||0)/fr*100:0};});
+
+  // --- Grupos de conta (despesa, período comparável) ---
+  const gck=r=>(r.GRUPO_CONTA||'').toString().trim();
+  const bgDr=gs(despC,gck,'VLR_REALIZADO');const bgDp=gs(despC,gck,'VLR_PREVISAO');
+  const grupos=[...bgDr.keys()].map(gc=>{const dr=bgDr.get(gc)||0,dp=bgDp.get(gc)||0;return{GRUPO_CONTA:gc,DESP_REAL:dr,DESP_PREV:dp,DESVIO:dp>0?(dr-dp)/dp*100:0};}).sort((a,b)=>b.DESP_REAL-a.DESP_REAL);
+
+  // --- Meta ---
+  const tFr=fatC.reduce((s,r)=>s+(+r.VLR_REALIZADO||0),0);
+  const tFp=fatC.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
+  const tDr=despC.reduce((s,r)=>s+(+r.VLR_REALIZADO||0),0);
+  const tDp=despC.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
+  const tFpA=fat.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
+  const tDpA=desp.reduce((s,r)=>s+(+r.VLR_PREVISAO||0),0);
+  const meta={periodo:periodoStr,filiais_count:filiais.length,tot_fat_real:tFr,tot_fat_prev:tFp,tot_desp_real:tDr,tot_desp_prev:tDp,tot_fat_prev_ano:tFpA,tot_desp_prev_ano:tDpA,perc_desp_real:tFr>0?tDr/tFr*100:0,perc_desp_plan:tFp>0?tDp/tFp*100:0,resultado:tFr-tDr,dev_fat:tFp>0?(tFr-tFp)/tFp*100:0,dev_desp:tDp>0?(tDr-tDp)/tDp*100:0};
+  return{meta,filiais,meses,filiais_mes,regionais,auditores,grupos};
+}
+
+function _logXLSXSummary(){
+  const m=DATA.meta;
+  if(!_regionaisMap||!_regionaisMap.size) addLog('ℹ️ Sem Base_regionais.xlsx — LOJA/REGIONAL/AUDITOR como "N/D". Arraste também o Base_regionais.xlsx para nomes completos.','');
+  addLog('✅ Excel carregado com sucesso!','log-ok');
+  addLog(`📊 ${m.filiais_count} filiais | ${m.periodo}`,'log-ok');
+  addLog(`💰 Fat. Real: ${fmtM(m.tot_fat_real)}`,'log-ok');
+  addLog(`📤 Desp. Real: ${fmtM(m.tot_desp_real)}`,'log-ok');
+  addLog(`⚖️ Resultado: ${fmtM(m.resultado)}`,'log-ok');
 }
 
 function addLog(msg,cls){
