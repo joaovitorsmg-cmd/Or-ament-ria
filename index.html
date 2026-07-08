@@ -258,6 +258,17 @@ tbody tr:hover{background:var(--row-hover)}
 .year-pill.active{background:#fff;color:var(--azul-escuro)}
 .year-pill:hover:not(.active){background:rgba(255,255,255,.15)}
 
+/* ===== MODO APRESENTAÇÃO ===== */
+body.presentation-mode .tabs,
+body.presentation-mode .filters,
+body.presentation-mode .filtros-bar{display:none!important}
+body.presentation-mode .header>div:nth-child(2){display:none!important}
+body.presentation-mode .content{padding-top:16px}
+#btn-present.presenting{background:rgba(255,200,100,.25);border-color:rgba(255,200,100,.6)}
+
+/* ===== SPARKLINES ===== */
+.spk{vertical-align:middle;border-radius:3px}
+
 /* ===== ANÁLISE DETALHADA ===== */
 .filtros-bar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;background:var(--branco);border-radius:8px;padding:12px 16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px}
 .filtro-group{display:flex;flex-direction:column;gap:3px}
@@ -298,6 +309,7 @@ tbody tr:hover{background:var(--row-hover)}
       <button class="ico-btn" id="btn-theme" onclick="toggleTheme()" title="Alternar tema"><span class="tooltip">Tema: Automático</span>☀️</button>
       <button class="ico-btn" onclick="switchTab('tab-upload')" title="Atualizar base de dados"><span class="tooltip">Atualizar base de dados</span>🔄</button>
       <button class="ico-btn" onclick="printPainel()" title="Imprimir painel"><span class="tooltip">Imprimir painel</span>🖨️</button>
+      <button class="ico-btn" id="btn-present" onclick="togglePresentationMode()" title="Modo apresentação"><span class="tooltip">Modo apresentação</span>📽️</button>
     </div>
     <div class="header-meta">
       <div id="year-selector" style="display:none;gap:4px"></div>
@@ -375,6 +387,7 @@ tbody tr:hover{background:var(--row-hover)}
         <div style="font-size:11px;font-weight:700;color:var(--azul-cl);margin-top:2px">% Desp/Fat Real: <span id="cg-perc-real">—</span></div>
       </div>
     </div>
+    <div id="cg-alert-badge" style="margin-top:12px;min-height:34px"></div>
   </div>
 
   <!-- KPIs -->
@@ -468,6 +481,7 @@ tbody tr:hover{background:var(--row-hover)}
           <th class="num">Desp. Planejada</th>
           <th class="num">Desv. Desp %</th>
           <th class="num">% Desp/Fat</th>
+          <th class="num">Tendência</th>
           <th></th>
         </tr>
       </thead>
@@ -616,6 +630,7 @@ tbody tr:hover{background:var(--row-hover)}
     <div class="toolbar-end icon-toolbar">
       <button class="ico-btn-light" onclick="exportTable('tbl-comparativo','comparativo_filiais')" title="Exportar tabela em PNG"><span class="tooltip">Exportar tabela em PNG</span>📥</button>
       <button class="ico-btn-light" onclick="copyTableCSV('tbl-comparativo')" title="Copiar tabela como CSV"><span class="tooltip">Copiar tabela como CSV</span>📋</button>
+      <button class="ico-btn-light" onclick="exportComparativoXLS()" title="Exportar tabela como Excel"><span class="tooltip">Exportar tabela como Excel</span>📊</button>
     </div>
   </div>
 
@@ -954,6 +969,7 @@ function initAll(){
   renderComparativo();
   updateCardGeral(m);
   _updateThemeBtn();
+  if(_firstLoad){_firstLoad=false;_applyUrlFilters();}
 }
 
 // =========================================================
@@ -1230,7 +1246,7 @@ function renderGruposDesv(){
 // =========================================================
 function renderTabFiliais(filiais){
   const b=document.getElementById('body-filiais');
-  if(!filiais||!filiais.length){b.innerHTML='<tr><td colspan="12" class="empty">Sem dados</td></tr>';return;}
+  if(!filiais||!filiais.length){b.innerHTML='<tr><td colspan="13" class="empty">Sem dados</td></tr>';return;}
   b.innerHTML=filiais.map(f=>{
     const df=f.DESVIO_FAT||0; const dd=f.DESVIO_DESP||0;
     return `<tr>
@@ -1245,9 +1261,11 @@ function renderTabFiliais(filiais){
       <td class="num">${fmtM(f.DESP_PREV)}</td>
       <td class="num ${clP(dd,true)}">${fmtP(dd)}</td>
       <td class="num ${f.PERC_DESP>20?'tx-neg':f.PERC_DESP<13?'tx-pos':'tx-warn'}">${fmtP(f.PERC_DESP)}</td>
+      <td style="padding:4px 8px"><canvas class="spk" data-fid="${f.ID_FILIAL}" width="80" height="26" style="display:block"></canvas></td>
       <td><button class="ico-mini" onclick="exportFilialCardPNG('${f.SIGLA}')" title="Exportar card desta filial"><span class="tooltip">Exportar card desta filial</span>🖼️</button></td>
     </tr>`;
   }).join('');
+  _drawFilialSparklines();
 }
 
 function renderTabRegional(){
@@ -1479,8 +1497,10 @@ function applyOvFilters(){
   m.resultado=m.tot_fat_real-m.tot_desp_real;
   m.dev_fat=m.tot_fat_prev>0?((m.tot_fat_real-m.tot_fat_prev)/m.tot_fat_prev*100):0;
   m.dev_desp=m.tot_desp_prev>0?((m.tot_desp_real-m.tot_desp_prev)/m.tot_desp_prev*100):0;
+  m._fils=filiais;
   renderKPIs(m);
   updateCardGeral(m);
+  _syncUrlHash();
 }
 
 function clearOvFilters(){
@@ -1489,6 +1509,7 @@ function clearOvFilters(){
   document.getElementById('ov-mes').value='';
   renderKPIs(DATA.meta);
   updateCardGeral(DATA.meta);
+  _syncUrlHash();
 }
 
 // =========================================================
@@ -1527,6 +1548,12 @@ function updateCardGeral(m){
   document.getElementById('cg-perc-plan').textContent=fmtP(m.perc_desp_plan);
   document.getElementById('cg-perc-real').textContent=fmtP(m.perc_desp_real);
   document.getElementById('cg-count').textContent=m.filiais_count;
+  const fils=m._fils||(DATA?DATA.filiais:[]);
+  const atRisk=fils.filter(f=>f.FAT_PREV>0&&f.FAT_REAL/f.FAT_PREV<0.80).length;
+  const badge=document.getElementById('cg-alert-badge');
+  if(badge) badge.innerHTML=atRisk>0
+    ?`<div style="background:rgba(239,154,154,.25);border:1px solid rgba(239,154,154,.5);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;color:#EF9A9A">⚠️ ${atRisk} filial${atRisk>1?'is':''} abaixo de 80% da meta de faturamento</div>`
+    :`<div style="background:rgba(165,214,167,.2);border:1px solid rgba(165,214,167,.4);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;color:#A5D6A7">✅ Todas as filiais com dado disponível estão acima de 80% da meta</div>`;
 }
 
 // =========================================================
@@ -2556,6 +2583,121 @@ function downloadBatScript(){
   a.href=URL.createObjectURL(blob);
   a.download='gerar_json.bat';
   a.click();
+}
+
+// =========================================================
+// PRESENTATION MODE
+// =========================================================
+function togglePresentationMode(){
+  const active=document.body.classList.toggle('presentation-mode');
+  const btn=document.getElementById('btn-present');
+  if(btn){
+    btn.classList.toggle('presenting',active);
+    const tip=btn.querySelector('.tooltip');
+    if(tip)tip.textContent=active?'Sair da apresentação':'Modo apresentação';
+  }
+  if(active&&document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+  else if(!active&&document.fullscreenElement) document.exitFullscreen();
+}
+document.addEventListener('fullscreenchange',()=>{
+  if(!document.fullscreenElement&&document.body.classList.contains('presentation-mode')){
+    document.body.classList.remove('presentation-mode');
+    const btn=document.getElementById('btn-present');
+    if(btn){btn.classList.remove('presenting');const t=btn.querySelector('.tooltip');if(t)t.textContent='Modo apresentação';}
+  }
+});
+
+// =========================================================
+// SPARKLINES — tendência de faturamento mensal nas filiais
+// =========================================================
+function _drawFilialSparklines(){
+  if(!DATA||!DATA.filiais_mes)return;
+  const byFil=new Map();
+  DATA.filiais_mes.forEach(r=>{
+    if(!byFil.has(r.ID_FILIAL))byFil.set(r.ID_FILIAL,[]);
+    byFil.get(r.ID_FILIAL).push({mes:r.MES,val:r.FAT_REAL});
+  });
+  document.querySelectorAll('.spk').forEach(canvas=>{
+    const fid=+canvas.dataset.fid;
+    const rows=(byFil.get(fid)||[]).sort((a,b)=>a.mes-b.mes);
+    if(rows.length<2)return;
+    _paintSparkline(canvas,rows.map(r=>r.val));
+  });
+}
+
+function _paintSparkline(canvas,vals){
+  const ctx=canvas.getContext('2d');
+  const W=canvas.width,H=canvas.height;
+  ctx.clearRect(0,0,W,H);
+  const pos=vals.filter(v=>v>0);
+  if(pos.length<2)return;
+  const mn=Math.min(...pos)*0.92,mx=Math.max(...pos)*1.05;
+  const sy=v=>v>0?H-((v-mn)/(mx-mn||1))*(H-6)-2:null;
+  const sx=(i,n)=>(i/(n-1||1))*(W-4)+2;
+  const pts=vals.map((v,i)=>({x:sx(i,vals.length),y:sy(v)})).filter(p=>p.y!==null);
+  if(pts.length<2)return;
+  ctx.beginPath();
+  pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+  ctx.lineTo(pts[pts.length-1].x,H);ctx.lineTo(pts[0].x,H);ctx.closePath();
+  ctx.fillStyle='rgba(100,181,246,0.18)';ctx.fill();
+  ctx.beginPath();
+  pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+  ctx.strokeStyle='#64B5F6';ctx.lineWidth=1.5;ctx.lineJoin='round';ctx.stroke();
+  const lp=pts[pts.length-1];
+  ctx.beginPath();ctx.arc(lp.x,lp.y,2.5,0,Math.PI*2);ctx.fillStyle='#64B5F6';ctx.fill();
+}
+
+// =========================================================
+// EXPORT XLS — COMPARATIVO FILIAIS
+// =========================================================
+function exportComparativoXLS(){
+  if(!DATA)return;
+  const tol=parseInt(document.getElementById('cmp-tol').value||15,10);
+  const todosGrupos=computeGruposComparativo(tol);
+  const rows=[];
+  todosGrupos.forEach(g=>{
+    const label=g.sozinha?'— (sem grupo nesta faixa)':`${fmtM(g.fatMin)} – ${fmtM(g.fatMax)}`;
+    g.filiais.forEach(f=>rows.push({
+      'Filial':f.SIGLA,'Loja':f.LOJA||'—','Regional':f.REGIONAL||'—',
+      'Fat. Realizado':f.FAT_REAL,'% Desp/Fat':+f.PERC_DESP.toFixed(2),
+      'Grupo (faixa de faturamento parecido)':label
+    }));
+  });
+  rows.sort((a,b)=>b['Fat. Realizado']-a['Fat. Realizado']);
+  const ws=XLSX.utils.json_to_sheet(rows);
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Comparativo');
+  XLSX.writeFile(wb,`comparativo_filiais_${DATA.meta.ano||'2026'}.xlsx`);
+}
+
+// =========================================================
+// URL HASH — persistência de filtros da Visão Geral
+// =========================================================
+let _firstLoad=true;
+
+function _syncUrlHash(){
+  const reg=document.getElementById('ov-regional').value;
+  const aud=document.getElementById('ov-auditor').value;
+  const mes=document.getElementById('ov-mes').value;
+  const p=new URLSearchParams();
+  if(reg)p.set('regional',reg);
+  if(aud)p.set('auditor',aud);
+  if(mes)p.set('mes',mes);
+  const s=p.toString();
+  history.replaceState(null,'',location.pathname+location.search+(s?'#'+s:''));
+}
+
+function _applyUrlFilters(){
+  const hash=(window.location.hash||'').slice(1);
+  if(!hash)return;
+  const p=new URLSearchParams(hash);
+  const reg=p.get('regional')||'';
+  const aud=p.get('auditor')||'';
+  const mes=p.get('mes')||'';
+  if(!reg&&!aud&&!mes)return;
+  const sel=(id,val)=>{const el=document.getElementById(id);if(el)[...el.options].forEach(o=>o.selected=o.value===val);};
+  sel('ov-regional',reg);sel('ov-auditor',aud);sel('ov-mes',mes);
+  applyOvFilters();
 }
 
 // =========================================================
