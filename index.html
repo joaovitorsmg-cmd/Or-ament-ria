@@ -1921,133 +1921,6 @@ function limparFiltrosAnalise(){
   renderAnalise();
 }
 
-function renderAnalise(){
-  if(!DATA) return;
-  _populateAnaliseSelects();
-  const regional=document.getElementById('sel-an-regional').value;
-  const auditor=document.getElementById('sel-an-auditor').value;
-  const filialId=+(document.getElementById('sel-an-filial').value)||0;
-
-  let filFiltradas=DATA.filiais;
-  if(filialId) filFiltradas=filFiltradas.filter(f=>+f.ID_FILIAL===filialId);
-  else{
-    if(regional) filFiltradas=filFiltradas.filter(f=>f.REGIONAL===regional);
-    if(auditor)  filFiltradas=filFiltradas.filter(f=>f.AUDITOR===auditor);
-  }
-
-  const ids=new Set(filFiltradas.map(f=>+f.ID_FILIAL));
-  const totFatReal=filFiltradas.reduce((s,f)=>s+f.FAT_REAL,0);
-  const totFatPrev=filFiltradas.reduce((s,f)=>s+f.FAT_PREV,0);
-  const totDespReal=filFiltradas.reduce((s,f)=>s+f.DESP_REAL,0);
-  const totDespPrev=filFiltradas.reduce((s,f)=>s+f.DESP_PREV,0);
-
-  // Compute grupos from grupos_filial filtered by selected filiais
-  const gfRows=(DATA.grupos_filial||[]).filter(r=>ids.has(+r.ID_FILIAL));
-  const gMap={};
-  gfRows.forEach(r=>{
-    const gc=r.GRUPO_CONTA;
-    if(!gMap[gc]) gMap[gc]={GRUPO_CONTA:gc,DESP_REAL:0,DESP_PREV:0};
-    gMap[gc].DESP_REAL+=r.DESP_REAL;
-    gMap[gc].DESP_PREV+=r.DESP_PREV;
-  });
-  // Fallback: if no grupos_filial, use DATA.grupos
-  const grupos=Object.keys(gMap).length>0
-    ? Object.values(gMap).map(g=>({...g,DESVIO:g.DESP_PREV>0?(g.DESP_REAL-g.DESP_PREV)/g.DESP_PREV*100:0})).sort((a,b)=>b.DESP_REAL-a.DESP_REAL)
-    : (DATA.grupos||[]);
-
-  // Title
-  let label='Consolidado';
-  if(filialId){const f=DATA.filiais.find(x=>+x.ID_FILIAL===filialId);label=f?`${f.SIGLA} — ${f.LOJA}`:String(filialId);}
-  else if(regional) label=`Regional: ${regional}`;
-  else if(auditor)  label=`Auditor: ${auditor}`;
-  document.getElementById('analise-chart-title').textContent=`📊 Despesa por Grupo — ${label}`;
-  document.getElementById('analise-tbl-title').textContent=`📋 Grupos de Conta — ${label}`;
-  document.getElementById('analise-filiais-title').textContent=`🏢 Filiais — ${label} (${filFiltradas.length})`;
-
-  _renderAnaliseCards(totFatReal,totFatPrev,totDespReal,totDespPrev,filFiltradas.length);
-  _renderAnaliseGruposTable(grupos,totDespReal);
-  _renderAnaliseChart(grupos);
-  _renderAnaliseFiliais(filFiltradas);
-}
-
-function _renderAnaliseCards(fatR,fatP,despR,despP,count){
-  const devFat=fatP>0?(fatR-fatP)/fatP*100:0;
-  const devDesp=despP>0?(despR-despP)/despP*100:0;
-  const perc=fatR>0?despR/fatR*100:0;
-  document.getElementById('analise-cards').innerHTML=`
-    <div class="kpi"><div class="kpi-label">💰 Fat. Realizado</div><div class="kpi-val">${fmtM(fatR)}</div><div class="kpi-sub">Planejado: ${fmtM(fatP)}</div></div>
-    <div class="kpi ${devFat>=0?'verde':'vermelho'}"><div class="kpi-label">📈 Desvio Faturamento</div><div class="kpi-val">${devFat>=0?'+':''}${fmtP(devFat)}</div><div class="kpi-sub">${devFat>=0?'Acima':'Abaixo'} do plano</div></div>
-    <div class="kpi vermelho"><div class="kpi-label">📤 Desp. Realizada</div><div class="kpi-val">${fmtM(despR)}</div><div class="kpi-sub">Planejado: ${fmtM(despP)}</div></div>
-    <div class="kpi ${devDesp<=0?'verde':'vermelho'}"><div class="kpi-label">📉 Desvio Despesa</div><div class="kpi-val">${devDesp>=0?'+':''}${fmtP(devDesp)}</div><div class="kpi-sub">${devDesp>0?'Acima':'Dentro'} do plano</div></div>
-    <div class="kpi amarelo"><div class="kpi-label">📊 % Desp/Fat</div><div class="kpi-val">${fmtP(perc)}</div><div class="kpi-sub">${count} filiai${count!==1?'s':''} no filtro</div></div>
-  `;
-}
-
-function _renderAnaliseGruposTable(grupos,totalDesp){
-  const b=document.getElementById('body-analise-grupos');
-  if(!grupos.length){b.innerHTML='<tr><td colspan="6" class="empty">Sem dados</td></tr>';return;}
-  b.innerHTML=grupos.map(g=>{
-    const desvR=g.DESP_REAL-g.DESP_PREV;
-    const pct=totalDesp>0?g.DESP_REAL/totalDesp*100:0;
-    return `<tr>
-      <td>${g.GRUPO_CONTA}</td>
-      <td class="num">${fmtM(g.DESP_REAL)}</td>
-      <td class="num">${fmtM(g.DESP_PREV)}</td>
-      <td class="num ${desvR>0?'tx-neg':'tx-pos'}">${fmtM(desvR)}</td>
-      <td class="num ${g.DESVIO>10?'tx-neg':g.DESVIO>0?'tx-warn':'tx-pos'}">${g.DESVIO>=0?'+':''}${fmtP(g.DESVIO)}</td>
-      <td class="num">${pct.toFixed(1)}%</td>
-    </tr>`;
-  }).join('');
-}
-
-function _renderAnaliseChart(grupos){
-  destroyChart('ch-analise');
-  if(!grupos.length) return;
-  const top=grupos.slice(0,12);
-  const isDark=document.documentElement.getAttribute('data-theme')==='dark'||(!document.documentElement.getAttribute('data-theme')&&window.matchMedia('(prefers-color-scheme:dark)').matches);
-  const textColor=isDark?'#ccc':'#333';
-  const ctx=document.getElementById('ch-analise').getContext('2d');
-  charts_reg['ch-analise']=new Chart(ctx,{
-    type:'bar',
-    data:{
-      labels:top.map(g=>g.GRUPO_CONTA.replace(/^\d+\-/,'')),
-      datasets:[
-        {label:'Realizado',data:top.map(g=>g.DESP_REAL),backgroundColor:'#C62828',borderRadius:3},
-        {label:'Planejado',data:top.map(g=>g.DESP_PREV),backgroundColor:'rgba(198,40,40,.25)',borderRadius:3,borderColor:'#C62828',borderWidth:1}
-      ]
-    },
-    options:{
-      indexAxis:'y',
-      responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{labels:{color:textColor,font:{size:11}}},tooltip:{callbacks:{label:c=>' '+fmtM(c.raw)}}},
-      scales:{
-        x:{ticks:{color:textColor,callback:v=>fmtM(v)},grid:{color:isDark?'rgba(255,255,255,.06)':'rgba(0,0,0,.06)'}},
-        y:{ticks:{color:textColor,font:{size:10}}}
-      }
-    }
-  });
-}
-
-function _renderAnaliseFiliais(filiais){
-  const b=document.getElementById('body-analise-filiais');
-  b.innerHTML=filiais.map(f=>{
-    const df=f.DESVIO_FAT||0;const dd=f.DESVIO_DESP||0;
-    return `<tr>
-      <td><span class="sigla">${f.SIGLA||f.ID_FILIAL}</span></td>
-      <td>${f.LOJA||'—'}</td>
-      <td>${f.REGIONAL||'—'}</td>
-      <td>${f.AUDITOR||'—'}</td>
-      <td class="num">${fmtM(f.FAT_REAL)}</td>
-      <td class="num">${fmtM(f.FAT_PREV)}</td>
-      <td class="num ${clP(df)}">${df>=0?'+':''}${fmtP(df)}</td>
-      <td class="num">${fmtM(f.DESP_REAL)}</td>
-      <td class="num">${fmtM(f.DESP_PREV)}</td>
-      <td class="num ${clP(dd,true)}">${dd>=0?'+':''}${fmtP(dd)}</td>
-      <td class="num ${f.PERC_DESP>20?'tx-neg':f.PERC_DESP<13?'tx-pos':'tx-warn'}">${fmtP(f.PERC_DESP)}</td>
-    </tr>`;
-  }).join('');
-}
-
 // =========================================================
 // MULTI-ANO
 // =========================================================
@@ -2142,7 +2015,7 @@ function renderAnalise(){
   if(tFil)   tFil.textContent=`🏢 Filiais — ${label} (${filFiltradas.length})`;
 
   _renderAnaliseCards(totFatReal,totFatPrev,totDespReal,totDespPrev,filFiltradas.length);
-  _renderAnaliseGruposTable(grupos,totDespReal);
+  _renderAnaliseGruposTable(grupos,totDespReal,totFatReal,totFatPrev);
   _renderAnaliseChart(grupos);
   _renderAnaliseFiliais(filFiltradas);
 }
@@ -2162,11 +2035,21 @@ function _renderAnaliseCards(fatR,fatP,despR,despP,count){
   `;
 }
 
-function _renderAnaliseGruposTable(grupos,totalDesp){
+function _renderAnaliseGruposTable(grupos,totalDesp,fatR,fatP){
   const b=document.getElementById('body-analise-grupos');
   if(!b) return;
-  if(!grupos.length){b.innerHTML='<tr><td colspan="6" class="empty">Sem dados — carregue um arquivo com grupos_filial</td></tr>';return;}
-  b.innerHTML=grupos.map(g=>{
+  if(!grupos.length&&!(fatR>0)){b.innerHTML='<tr><td colspan="6" class="empty">Sem dados — carregue um arquivo com grupos_filial</td></tr>';return;}
+  const fatDesvR=(fatR||0)-(fatP||0);
+  const fatDesvPct=fatP>0?fatDesvR/fatP*100:0;
+  const fatRow=`<tr style="background:rgba(27,94,32,.10);font-weight:600;border-bottom:2px solid rgba(27,94,32,.25)">
+    <td>01-VENDAS DE MERCADORIAS <span style="font-size:10px;font-weight:400;opacity:.65">(Faturamento)</span></td>
+    <td class="num tx-pos">${fmtM(fatR||0)}</td>
+    <td class="num">${fmtM(fatP||0)}</td>
+    <td class="num ${fatDesvR>=0?'tx-pos':'tx-neg'}">${fmtM(fatDesvR)}</td>
+    <td class="num ${fatDesvPct>=0?'tx-pos':'tx-neg'}">${fatDesvPct>=0?'+':''}${fmtP(fatDesvPct)}</td>
+    <td class="num" style="opacity:.45">—</td>
+  </tr>`;
+  const despRows=grupos.map(g=>{
     const desvR=g.DESP_REAL-g.DESP_PREV;
     const pct=totalDesp>0?g.DESP_REAL/totalDesp*100:0;
     return `<tr>
@@ -2178,6 +2061,7 @@ function _renderAnaliseGruposTable(grupos,totalDesp){
       <td class="num">${pct.toFixed(1)}%</td>
     </tr>`;
   }).join('');
+  b.innerHTML=fatRow+despRows;
 }
 
 function _renderAnaliseChart(grupos){
