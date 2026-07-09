@@ -634,6 +634,32 @@ body.presentation-mode .content{padding-top:16px}
 <div class="content" id="content-tab-comparativo">
   <div class="filters">
     <div class="f-group">
+      <label>Regional</label>
+      <div class="chk-dropdown" id="dd-cmp-reg">
+        <button class="chk-dd-trigger" onclick="toggleChkDropdown('dd-cmp-reg')" type="button">
+          <span id="dd-cmp-reg-label">Todas</span><span class="dd-arrow">▾</span>
+        </button>
+        <div class="chk-dd-panel" id="dd-cmp-reg-panel">
+          <label class="chk-dd-item item-all">
+            <input type="checkbox" id="chk-cmp-reg-all" checked onchange="onChkCmpRegAll(this)"> Todas
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="f-group">
+      <label>Filiais</label>
+      <div class="chk-dropdown" id="dd-cmp-fil">
+        <button class="chk-dd-trigger" onclick="toggleChkDropdown('dd-cmp-fil')" type="button">
+          <span id="dd-cmp-fil-label">Todas</span><span class="dd-arrow">▾</span>
+        </button>
+        <div class="chk-dd-panel" id="dd-cmp-fil-panel">
+          <label class="chk-dd-item item-all">
+            <input type="checkbox" id="chk-cmp-fil-all" checked onchange="onChkCmpFilAll(this)"> Todas
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="f-group">
       <label>Quão parecido o faturamento precisa ser</label>
       <select id="cmp-tol" onchange="renderComparativo()">
         <option value="10">Bem parecido (± 10%)</option>
@@ -654,6 +680,10 @@ body.presentation-mode .content{padding-top:16px}
     <div class="f-group">
       <label>&nbsp;</label>
       <label class="chk-label"><input type="checkbox" id="cmp-only-alert" onchange="renderComparativo()"> Mostrar só grupos com diferença grande</label>
+    </div>
+    <div class="f-group" style="justify-content:flex-end">
+      <label>&nbsp;</label>
+      <button class="btn-limpar" onclick="clearCmpFilters()" style="align-self:center">Limpar filtros</button>
     </div>
     <div class="toolbar-end icon-toolbar">
       <button class="ico-btn-light" onclick="exportTable('tbl-comparativo','comparativo_filiais')" title="Exportar tabela em PNG"><span class="tooltip">Exportar tabela em PNG</span>📥</button>
@@ -1018,6 +1048,8 @@ function populateSelects(){
     auditores.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;s.appendChild(o);});
   });
 
+  populateCmpFilters();
+
   // Popula dropdown de meses com checkboxes
   const mesPanel=document.getElementById('dd-mes-panel');
   if(mesPanel){
@@ -1350,6 +1382,136 @@ function renderTabGrupos(){
 }
 
 // =========================================================
+// COMPARATIVO — FILTROS CHECKBOX (regional e filial)
+// =========================================================
+function populateCmpFilters(){
+  if(!DATA) return;
+  const base=_filiaisComparaveis();
+  const regionais=[...new Set(base.map(f=>f.REGIONAL).filter(Boolean))].sort();
+
+  // --- painel de regionais ---
+  const regPanel=document.getElementById('dd-cmp-reg-panel');
+  if(regPanel){
+    const allItem=regPanel.querySelector('.item-all');
+    regPanel.innerHTML='';
+    if(allItem) regPanel.appendChild(allItem);
+    regionais.forEach(reg=>{
+      const lbl=document.createElement('label');
+      lbl.className='chk-dd-item';
+      lbl.innerHTML=`<input type="checkbox" class="chk-cmp-reg" value="${reg}" checked onchange="onChkCmpReg(this)"> ${reg}`;
+      regPanel.appendChild(lbl);
+    });
+    _updateCmpLabel('dd-cmp-reg-label','.chk-cmp-reg','regionais','regional');
+  }
+
+  // --- painel de filiais (ordenadas por LOJA) ---
+  const filPanel=document.getElementById('dd-cmp-fil-panel');
+  if(filPanel){
+    const allItem=filPanel.querySelector('.item-all');
+    filPanel.innerHTML='';
+    if(allItem) filPanel.appendChild(allItem);
+    [...base].sort((a,b)=>(a.LOJA||'').localeCompare(b.LOJA||'')).forEach(f=>{
+      const lbl=document.createElement('label');
+      lbl.className='chk-dd-item';
+      lbl.innerHTML=`<input type="checkbox" class="chk-cmp-fil" value="${f.ID_FILIAL}" checked onchange="onChkCmpFil(this)"> <span class="sigla" style="font-size:10px">${f.SIGLA}</span> ${f.LOJA||f.SIGLA}`;
+      filPanel.appendChild(lbl);
+    });
+    _updateCmpLabel('dd-cmp-fil-label','.chk-cmp-fil','filiais','filial');
+  }
+}
+
+function _cmpFilteredFiliais(){
+  const base=_filiaisComparaveis();
+  const selReg=new Set([...document.querySelectorAll('.chk-cmp-reg:checked')].map(c=>c.value));
+  const selFil=new Set([...document.querySelectorAll('.chk-cmp-fil:checked')].map(c=>+c.value));
+  const totalReg=document.querySelectorAll('.chk-cmp-reg').length;
+  const totalFil=document.querySelectorAll('.chk-cmp-fil').length;
+  return base.filter(f=>{
+    const okReg=selReg.size===0||selReg.size===totalReg||selReg.has(f.REGIONAL);
+    const okFil=selFil.size===0||selFil.size===totalFil||selFil.has(f.ID_FILIAL);
+    return okReg&&okFil;
+  });
+}
+
+function _updateCmpLabel(labelId, selector, plural, singular){
+  const all=document.querySelectorAll(selector);
+  const checked=[...document.querySelectorAll(selector+':checked')];
+  const lbl=document.getElementById(labelId);
+  if(!lbl) return;
+  if(!all.length||checked.length===all.length){lbl.textContent='Todas';return;}
+  if(checked.length===0){lbl.textContent='Nenhuma';return;}
+  if(checked.length===1){
+    // Mostra o texto do label do checkbox (sem o sigla span)
+    const item=checked[0].closest('label');
+    const txt=item?item.textContent.trim():checked[0].value;
+    lbl.textContent=txt.length>18?txt.slice(0,17)+'…':txt;
+    return;
+  }
+  lbl.textContent=`${checked.length} ${checked.length===1?singular:plural}`;
+}
+
+function onChkCmpRegAll(el){
+  document.querySelectorAll('.chk-cmp-reg').forEach(c=>c.checked=el.checked);
+  _updateCmpLabel('dd-cmp-reg-label','.chk-cmp-reg','regionais','regional');
+  // Ao filtrar regional, sincroniza filiais disponíveis
+  _syncCmpFilByReg();
+  renderComparativo();
+}
+
+function onChkCmpReg(el){
+  const all=document.querySelectorAll('.chk-cmp-reg');
+  const chk=[...all].filter(c=>c.checked);
+  const allChk=document.getElementById('chk-cmp-reg-all');
+  if(allChk) allChk.checked=chk.length===all.length;
+  _updateCmpLabel('dd-cmp-reg-label','.chk-cmp-reg','regionais','regional');
+  _syncCmpFilByReg();
+  renderComparativo();
+}
+
+function onChkCmpFilAll(el){
+  document.querySelectorAll('.chk-cmp-fil').forEach(c=>c.checked=el.checked);
+  _updateCmpLabel('dd-cmp-fil-label','.chk-cmp-fil','filiais','filial');
+  renderComparativo();
+}
+
+function onChkCmpFil(el){
+  const all=document.querySelectorAll('.chk-cmp-fil');
+  const chk=[...all].filter(c=>c.checked);
+  const allChk=document.getElementById('chk-cmp-fil-all');
+  if(allChk) allChk.checked=chk.length===all.length;
+  _updateCmpLabel('dd-cmp-fil-label','.chk-cmp-fil','filiais','filial');
+  renderComparativo();
+}
+
+function _syncCmpFilByReg(){
+  // Quando o filtro de regional muda, marca/desmarca automaticamente
+  // as filiais que pertencem às regionais desmarcadas
+  const selReg=new Set([...document.querySelectorAll('.chk-cmp-reg:checked')].map(c=>c.value));
+  const totalReg=document.querySelectorAll('.chk-cmp-reg').length;
+  const todasReg=selReg.size===totalReg;
+  const base=_filiaisComparaveis();
+  const filMap=new Map(base.map(f=>[f.ID_FILIAL,f]));
+  document.querySelectorAll('.chk-cmp-fil').forEach(c=>{
+    const f=filMap.get(+c.value);
+    c.checked=todasReg||(f&&selReg.has(f.REGIONAL));
+  });
+  const allChkFil=document.getElementById('chk-cmp-fil-all');
+  const allFil=document.querySelectorAll('.chk-cmp-fil');
+  const chkFil=[...allFil].filter(c=>c.checked);
+  if(allChkFil) allChkFil.checked=chkFil.length===allFil.length;
+  _updateCmpLabel('dd-cmp-fil-label','.chk-cmp-fil','filiais','filial');
+}
+
+function clearCmpFilters(){
+  // Marca tudo
+  ['chk-cmp-reg-all','chk-cmp-fil-all'].forEach(id=>{const el=document.getElementById(id);if(el)el.checked=true;});
+  document.querySelectorAll('.chk-cmp-reg,.chk-cmp-fil').forEach(c=>c.checked=true);
+  _updateCmpLabel('dd-cmp-reg-label','.chk-cmp-reg','regionais','regional');
+  _updateCmpLabel('dd-cmp-fil-label','.chk-cmp-fil','filiais','filial');
+  renderComparativo();
+}
+
+// =========================================================
 // COMPARATIVO DE FILIAIS (faturamento parecido, gasto discrepante)
 // =========================================================
 // Agrupa filiais em faixas de faturamento parecido: começa pela filial de
@@ -1359,7 +1521,7 @@ function renderTabGrupos(){
 // diferente de simplesmente ligar pares em cadeia — que acabaria juntando
 // quase todas as filiais num grupo só, sem nenhum limite prático de "parecido".
 function computeGruposComparativo(tolPerc){
-  const filiais=[..._filiaisComparaveis()].filter(f=>f.FAT_REAL>0).sort((a,b)=>b.FAT_REAL-a.FAT_REAL);
+  const filiais=[..._cmpFilteredFiliais()].filter(f=>f.FAT_REAL>0).sort((a,b)=>b.FAT_REAL-a.FAT_REAL);
   const usados=new Set();
   const grupos=[];
   filiais.forEach((f,i)=>{
@@ -1443,7 +1605,7 @@ function renderDestaques(destaques){
 
 function renderGruposCards(gruposExibidos, sozinhas, minDiff){
   const el=document.getElementById('cmp-grupos');
-  const maxPercAll=Math.max(..._filiaisComparaveis().map(f=>f.PERC_DESP), 1)*1.05;
+  const maxPercAll=Math.max(..._cmpFilteredFiliais().map(f=>f.PERC_DESP), 1)*1.05;
   let html='';
   if(!gruposExibidos.length){
     html=`<div class="empty">Nenhum grupo encontrado nesta faixa/limite. Tente aumentar a faixa de faturamento parecido ou reduzir o limite de diferença.</div>`;
