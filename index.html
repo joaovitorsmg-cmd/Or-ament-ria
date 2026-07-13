@@ -325,8 +325,8 @@ body.presentation-mode .content{padding-top:16px}
     </div>
     <div class="header-meta">
       <div id="year-selector" style="display:none;gap:4px"></div>
-      <span id="hd-periodo">Carregando...</span>
-      <span id="hd-filiais" style="font-size:10px">— filiais</span>
+      <span id="hd-periodo">Nenhuma base carregada</span>
+      <span id="hd-filiais" style="font-size:10px">↓ importe o xlsx</span>
     </div>
   </div>
 </div>
@@ -434,6 +434,16 @@ body.presentation-mode .content{padding-top:16px}
       </div>
     </div>
     <div id="cg-alert-badge" style="margin-top:12px;min-height:34px"></div>
+  </div>
+
+  <!-- Banner sem dados -->
+  <div id="banner-sem-dados" style="background:rgba(13,71,161,.12);border:1.5px solid rgba(13,71,161,.35);border-radius:10px;padding:18px 22px;margin-bottom:18px;align-items:center;gap:14px;flex-wrap:wrap;display:none">
+    <div style="font-size:28px">📂</div>
+    <div style="flex:1;min-width:200px">
+      <div style="font-size:13px;font-weight:700;color:var(--heading);margin-bottom:4px">Nenhuma base de dados carregada</div>
+      <div style="font-size:12px;color:var(--text-muted)">Importe o <strong>Mapa_Despesa.xlsx</strong> na aba Atualizar Base para visualizar os dados do painel.</div>
+    </div>
+    <button class="btn btn-primary" onclick="switchTab('tab-upload')" style="white-space:nowrap">🔄 Importar dados</button>
   </div>
 
   <!-- KPIs -->
@@ -1095,7 +1105,10 @@ function switchTab(id){
 // =========================================================
 async function loadData(src){
   try{
-    const r = await fetch(src);
+    const ctrl=new AbortController();
+    const tOut=setTimeout(()=>ctrl.abort(),5000); // 5s — evita travar em CDN lento
+    const r = await fetch(src,{signal:ctrl.signal});
+    clearTimeout(tOut);
     if(!r.ok) throw new Error('HTTP '+r.status);
     const nd = await r.json();
     if(nd._multi_ano && nd.anos){
@@ -1123,15 +1136,17 @@ async function loadData(src){
 // "Atualizar Base". Isso é esperado, não é um erro do painel.
 function showNoDataState(){
   document.getElementById('hd-periodo').textContent = 'Nenhuma base carregada';
-  document.getElementById('hd-filiais').textContent = 'importe o .xlsx';
-  switchTab('tab-upload');
+  document.getElementById('hd-filiais').textContent = '↓ importe o xlsx';
+  const b=document.getElementById('banner-sem-dados'); if(b) b.style.display='flex';
+  switchTab('tab-overview');
   addLog('👋 Nenhuma base carregada ainda neste navegador — isso é normal, os dados não ficam salvos no site por segurança.', '');
   addLog('Arraste o Mapa_Despesa.xlsx (e opcionalmente Base_regionais.xlsx) na área acima — ou o aqm_data.json gerado pelo Python.', 'log-ok');
 }
 
 function initAll(){
   _applyGlobalExclusions();
-  DATA.meta.filiais_count = DATA.filiais.length; // corrige contagem após exclusões globais
+  DATA.meta.filiais_count = DATA.filiais.length;
+  const b=document.getElementById('banner-sem-dados'); if(b) b.style.display='none';
   const m = DATA.meta;
   document.getElementById('hd-periodo').textContent = m.periodo || 'Jan-Mai 2026';
   document.getElementById('hd-filiais').textContent = `${m.filiais_count} filiais ativas`;
