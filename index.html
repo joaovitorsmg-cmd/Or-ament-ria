@@ -1529,7 +1529,7 @@ async function exportDiscrepanciaHD(){
         y:{ticks:{callback:v=>v+'%',font:{size:22,weight:'bold'},color:'#111'},
            title:{display:true,text:'% Despesa / Faturamento',font:{size:24,weight:'bold'},color:'#111'},
            grid:{display:false}},
-        x:{ticks:{font:{size:18,weight:'bold'},color:'#000',maxRotation:75,minRotation:60},grid:{display:false}}},
+        x:{ticks:{font:{size:18,weight:'bold'},color:'#000',maxRotation:75,minRotation:60},grid:{display:false}}}},
     plugins:[labelPlugin,bgPlugin]
   });
   await new Promise(r=>setTimeout(r,250));
